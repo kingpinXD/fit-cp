@@ -33,6 +33,13 @@ import org.robolectric.annotation.Config
 /**
  * Behavioural tests for ProgrammeViewModel. Exercises the full LiveData wiring
  * (week/day/exercise reactive chain), import flow, log mutation, and reset on delete.
+ *
+ * Trivial wrappers intentionally untested: each LiveData passthrough on the
+ * ViewModel (e.g. the `selectedWeek == null` else-branches in switchMap) is a
+ * one-liner returning `MutableLiveData(emptyList())`. The reactive chain is
+ * covered by `selecting only week without day yields empty exercises` and
+ * the initial-state tests; per-branch coverage of these fallbacks adds noise
+ * without testing real behaviour, so they are left as-is.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -408,6 +415,57 @@ class ProgrammeViewModelTest {
         assertTrue("first should be listed: $names", names.contains("first"))
         assertTrue("second should be listed: $names", names.contains("second"))
     }
+
+    // --- importProgrammeFromXlsx ---
+
+    @Test
+    fun `importProgrammeFromXlsx - happy path imports exercises and exposes weeks`() =
+        runTest(testDispatcher) {
+            val stream = javaClass.classLoader!!.getResourceAsStream("programmes/essentials_2x.xlsx")!!
+            var result: ImportResult? = null
+            viewModel.importProgrammeFromXlsx(stream, "from_xlsx") { result = it }
+            advanceUntilIdle()
+
+            assertEquals(ImportResult.IMPORTED, result)
+            assertEquals("from_xlsx", viewModel.programmeName.value)
+            assertEquals(true, viewModel.hasProgramme.observeOnce())
+        }
+
+    @Test
+    fun `importProgrammeFromXlsx with broken stream - callback not invoked, no crash`() =
+        runTest(testDispatcher) {
+            // Empty/garbage stream — XlsxParser will throw, ViewModel swallows it.
+            val brokenStream = "not a real xlsx".byteInputStream()
+            var invoked = false
+            viewModel.importProgrammeFromXlsx(brokenStream, "broken") { invoked = true }
+            advanceUntilIdle()
+
+            assertFalse("Failure path should swallow exception, not propagate", invoked)
+            assertEquals("", viewModel.programmeName.value)
+        }
+
+    // --- exportProgramme ---
+
+    @Test
+    fun `exportProgramme - invokes onResult with failure when Firebase init not available`() =
+        runTest(testDispatcher) {
+            viewModel.importProgramme(SAMPLE_JSON, "test_prog")
+            advanceUntilIdle()
+
+            var invoked = false
+            var firebaseOk: Boolean? = null
+            viewModel.exportProgramme("user-id") { _, ok ->
+                invoked = true
+                firebaseOk = ok
+            }
+            advanceUntilIdle()
+
+            // Robolectric has no FirebaseApp initialized — `firebaseSyncManager.exportProgramme`
+            // touches `auth.currentUser` lazily and throws. ViewModel catches and surfaces
+            // the failure via the callback so the UI can still react.
+            assertTrue("callback should fire on the failure path", invoked)
+            assertEquals(false, firebaseOk)
+        }
 
     // --- Helpers ---
 

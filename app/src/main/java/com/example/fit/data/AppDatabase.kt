@@ -223,7 +223,7 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
-        private val MIGRATION_8_9 = object : androidx.room.migration.Migration(8, 9) {
+        internal val MIGRATION_8_9 = object : androidx.room.migration.Migration(8, 9) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE exercises ADD COLUMN rest TEXT NOT NULL DEFAULT ''")
             }

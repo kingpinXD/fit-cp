@@ -123,6 +123,9 @@ dependencies {
     testImplementation("androidx.test.ext:junit-ktx:1.1.5")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("androidx.arch.core:core-testing:2.2.0")
+    testImplementation("org.mockito:mockito-core:5.10.0")
+    testImplementation("org.mockito:mockito-inline:5.2.0")
+    testImplementation("org.mockito.kotlin:mockito-kotlin:5.2.1")
 }
 
 // Compose UI is being rewritten in Flutter — exclude from coverage measurement.
