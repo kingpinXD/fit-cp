@@ -1,27 +1,40 @@
-# Build outputs
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
 build/
-app/build/
+.metadata
 
-# Gradle
-.gradle/
-local.properties
+# Android
+android/.gradle/
+android/local.properties
+android/.kotlin/
+android/app/build/
+android/build/
 
-# IDE
-.idea/
-*.iml
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
 
 # Firebase config (contains API keys)
-app/google-services.json
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
 
 # Release keystore (signing keys)
 *.keystore
 *.jks
 
+# IDE
+.idea/
+*.iml
+.vscode/
+
 # Claude context
 .claude/
-
-# Scaffolding tools (local only)
-android-app-scaffolding/
 
 # Sample programme files (copyrighted)
 sample/
