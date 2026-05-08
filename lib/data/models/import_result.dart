@@ -1,0 +1,1 @@
+enum ImportResult { imported, switched }
