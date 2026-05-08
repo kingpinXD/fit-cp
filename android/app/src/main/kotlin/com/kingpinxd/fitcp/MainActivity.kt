@@ -1,4 +1,4 @@
-package com.kingpinxd.fit_cp
+package com.kingpinxd.fitcp
 
 import io.flutter.embedding.android.FlutterActivity
 
