@@ -39,7 +39,7 @@ func get(t *testing.T, srv *httptest.Server, path string) (int, []byte) {
 
 func TestHealthz(t *testing.T) {
 	srv := newTestServer(t)
-	status, body := get(t, srv, "/healthz")
+	status, body := get(t, srv, "/health")
 	if status != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", status)
 	}

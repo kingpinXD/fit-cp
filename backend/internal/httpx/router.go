@@ -12,13 +12,16 @@ type RouterDeps struct {
 	AuthMW        func(http.Handler) http.Handler // built by caller, lets tests inject a stub
 }
 
-// NewRouter returns the full router with /healthz public and the /v1 surface
+// NewRouter returns the full router with /health public and the /v1 surface
 // guarded by AuthMW. Outer middleware (recover, request-id, logger) wraps both.
+//
+// We avoid /healthz because Google Cloud's frontend intercepts that exact
+// lowercase path before it ever reaches the container.
 func NewRouter(deps RouterDeps) http.Handler {
 	api := NewAPI(deps.Pool)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", api.Healthz)
+	mux.HandleFunc("GET /health", api.Healthz)
 
 	v1 := http.NewServeMux()
 	v1.HandleFunc("GET /v1/exercises", api.ListExercises)

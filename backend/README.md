@@ -32,14 +32,14 @@ make docker-up             # starts Postgres on :5432
 make migrate-up            # applies schema
 make seed                  # downloads exercises.json and upserts ~870 rows
 AUTH_DISABLED=true make run
-curl -s localhost:8080/healthz
+curl -s localhost:8080/health
 ```
 
 ## Endpoints (T6)
 
 All `v1/*` routes require `Authorization: Bearer <firebase-id-token>`. In local dev, set `AUTH_DISABLED=true` and the middleware injects `uid=dev`.
 
-- `GET /healthz` — liveness + DB ping. Public.
+- `GET /health` — liveness + DB ping. Public.
 - `GET /v1/exercises?muscle=&equipment=&level=&q=&limit=&offset=` — paginated list.
 - `GET /v1/exercises/{id}` — single exercise by slug id (e.g. `Barbell_Curl`).
 - `GET /v1/taxonomy` — `{muscles, equipment, levels, categories}` for filter UIs.
