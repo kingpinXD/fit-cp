@@ -8,6 +8,11 @@ endif
 
 DATABASE_URL ?= postgres://fit:fit@localhost:5432/fit_backend?sslmode=disable
 
+# Integration tests read TEST_DATABASE_URL (NOT DATABASE_URL) so a shell pointing
+# at production can never trip the suite into running TRUNCATE. Defaults to the
+# docker-compose connection.
+TEST_DATABASE_URL ?= postgres://fit:fit@localhost:5432/fit_backend?sslmode=disable
+
 .PHONY: run test build lint vet sqlc seed \
         migrate-up migrate-down migrate-new \
         docker-up docker-down docker-logs
@@ -20,7 +25,7 @@ build:
 	go build -o ./bin/seed ./cmd/seed
 
 test:
-	go test ./... -count=1
+	TEST_DATABASE_URL=$(TEST_DATABASE_URL) go test ./... -count=1
 
 vet:
 	go vet ./...

@@ -6,83 +6,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/kingpinXD/fit-cp/backend/internal/auth"
-	"github.com/kingpinXD/fit-cp/backend/internal/db"
 	"github.com/kingpinXD/fit-cp/backend/internal/httpx"
+	"github.com/kingpinXD/fit-cp/backend/internal/testhelpers"
 )
-
-// requireDB connects to DATABASE_URL or skips. Handlers tests run end-to-end
-// through the router, so they need a real Postgres.
-func requireDB(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
-		t.Skip("DATABASE_URL not set; skipping handlers integration test")
-	}
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, url)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		t.Fatalf("ping: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
-}
-
-func seedFixtures(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	ctx := context.Background()
-	if _, err := pool.Exec(ctx, "TRUNCATE exercises CASCADE"); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
-	q := db.New(pool)
-	fixtures := []db.UpsertExerciseParams{
-		{ID: "Barbell_Curl", Name: "Barbell Curl",
-			Force: pgtype.Text{String: "pull", Valid: true}, Level: "intermediate",
-			Mechanic:  pgtype.Text{String: "isolation", Valid: true},
-			Equipment: pgtype.Text{String: "barbell", Valid: true}, Category: "strength",
-			Instructions: []string{"step 1"}, ImageUrls: []string{"https://example/barbell_curl/0.jpg"}},
-		{ID: "Hammer_Curl", Name: "Hammer Curl",
-			Force: pgtype.Text{String: "pull", Valid: true}, Level: "beginner",
-			Mechanic:  pgtype.Text{String: "isolation", Valid: true},
-			Equipment: pgtype.Text{String: "dumbbell", Valid: true}, Category: "strength",
-			Instructions: []string{"step 1"}, ImageUrls: []string{"https://example/hammer_curl/0.jpg"}},
-		{ID: "Squat", Name: "Squat",
-			Force: pgtype.Text{String: "push", Valid: true}, Level: "intermediate",
-			Mechanic:  pgtype.Text{String: "compound", Valid: true},
-			Equipment: pgtype.Text{String: "barbell", Valid: true}, Category: "strength",
-			Instructions: []string{"step 1"}, ImageUrls: []string{"https://example/squat/0.jpg"}},
-	}
-	for _, f := range fixtures {
-		if err := q.UpsertExercise(ctx, f); err != nil {
-			t.Fatalf("upsert %s: %v", f.ID, err)
-		}
-	}
-	muscles := []db.InsertMuscleParams{
-		{ExerciseID: "Barbell_Curl", Muscle: "biceps", Role: "primary"},
-		{ExerciseID: "Barbell_Curl", Muscle: "forearms", Role: "secondary"},
-		{ExerciseID: "Hammer_Curl", Muscle: "biceps", Role: "primary"},
-		{ExerciseID: "Squat", Muscle: "quadriceps", Role: "primary"},
-	}
-	for _, m := range muscles {
-		if err := q.InsertMuscle(ctx, m); err != nil {
-			t.Fatalf("insert muscle: %v", err)
-		}
-	}
-}
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	pool := requireDB(t)
-	seedFixtures(t, pool)
+	pool := testhelpers.RequireDB(t)
+	testhelpers.SeedFixtures(t, pool)
 	router := httpx.NewRouter(httpx.RouterDeps{
 		Pool:   pool,
 		AuthMW: auth.DisabledMiddleware(),
@@ -187,9 +121,9 @@ func TestGetExerciseByID(t *testing.T) {
 		t.Fatalf("status: want 200, got %d body=%s", status, body)
 	}
 	var got struct {
-		ID      string   `json:"id"`
-		Name    string   `json:"name"`
-		Force   *string  `json:"force"`
+		ID      string  `json:"id"`
+		Name    string  `json:"name"`
+		Force   *string `json:"force"`
 		Muscles struct {
 			Primary   []string `json:"primary"`
 			Secondary []string `json:"secondary"`
@@ -252,9 +186,8 @@ func TestGetTaxonomy(t *testing.T) {
 }
 
 func TestAuthRequiredWhenMiddlewareEnforces(t *testing.T) {
-	pool := requireDB(t)
-	seedFixtures(t, pool)
-	// Build the router with a real Firebase-style middleware that always rejects.
+	pool := testhelpers.RequireDB(t)
+	testhelpers.SeedFixtures(t, pool)
 	rejecting := auth.Middleware(stubVerifier{err: errStub})
 	router := httpx.NewRouter(httpx.RouterDeps{Pool: pool, AuthMW: rejecting})
 	srv := httptest.NewServer(router)

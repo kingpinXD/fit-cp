@@ -65,6 +65,19 @@ Error shape:
 | `migrate-new`    | scaffolds a new migration: `make migrate-new NAME=foo`    |
 | `docker-up/down` | starts/stops the docker-compose Postgres                  |
 
+## Integration tests
+
+Integration tests read `TEST_DATABASE_URL` — deliberately separate from the runtime `DATABASE_URL` so a shell pointing at production can't trip the suite into running `TRUNCATE`. If unset, integration tests skip cleanly and only unit tests run.
+
+`make test` defaults `TEST_DATABASE_URL` to the docker-compose connection. As a second layer, the test helper refuses to proceed unless the host is one of `localhost`, `127.0.0.1`, `::1`, `postgres` (docker-compose), or `host.docker.internal`.
+
+```bash
+make docker-up
+make migrate-up
+make test                          # uses the docker-compose default
+TEST_DATABASE_URL=... make test    # custom local target
+```
+
 ## Firebase auth notes
 
 Firebase ID tokens carry the Firebase project ID in the `aud` claim. The verifier rejects tokens signed for any other project. The project ID for fit-cp is `fit-cp-tanmay` — same as the Flutter app's `google-services.json`.
