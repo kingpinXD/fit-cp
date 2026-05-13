@@ -62,6 +62,15 @@ Or set those in `deploy/.env.cloudrun` (gitignored) and just `bash deploy/cloud-
 
 `bash deploy/cloud-run.sh --dry-run` prints the resolved gcloud command without applying it.
 
+## Release checklist
+
+Run through this every time you cut a backend release:
+
+- [ ] **Rotate the Neon API key.** Revoke the current key and create a fresh one at https://console.neon.tech/app/settings/api-keys. The key only protects project create/delete operations; the runtime connection string is unaffected, so rotation is zero-downtime.
+- [ ] Run `bash deploy/cloud-run.sh` (or `bootstrap.sh` if anything infra-shaped changed).
+- [ ] `curl ${SERVICE_URL}/health` returns `{"status":"ok","db":"ok"}`.
+- [ ] Spot-check one authenticated endpoint with a real Firebase ID token from the Flutter app.
+
 ## What gets created
 
 | Resource                          | Where         | Cost (free tier)         |
