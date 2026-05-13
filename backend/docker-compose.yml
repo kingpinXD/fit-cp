@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: fit_backend_pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fit
+      POSTGRES_PASSWORD: fit
+      POSTGRES_DB: fit_backend
+    ports:
+      - "5432:5432"
+    volumes:
+      - fit_backend_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fit -d fit_backend"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  fit_backend_pg_data:

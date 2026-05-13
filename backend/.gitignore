@@ -1,0 +1,6 @@
+.env
+*.db
+vendor/
+coverage.out
+coverage.html
+deploy/.env.cloudrun
