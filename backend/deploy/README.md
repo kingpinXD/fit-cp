@@ -1,115 +1,97 @@
 # Deploy runbook — Cloud Run + Neon
 
-This is the manual runbook the operator (you) follows the first time. After that, `bash deploy/cloud-run.sh` deploys an updated image.
+Two scripts:
 
-The script under [`cloud-run.sh`](cloud-run.sh) doesn't create infra — it only deploys to an already-created Cloud Run service. Steps 1-4 below set up the infra; step 5 deploys; step 6 verifies.
+- **`bootstrap.sh`** — one-shot end-to-end. Creates the Neon project, runs migrations + seed, enables GCP APIs, deploys to Cloud Run, smoke-tests. Idempotent.
+- **`cloud-run.sh`** — Cloud Run redeploy only (called by bootstrap, or run alone for code-only updates).
 
-## 1. Neon Postgres
+Both are non-interactive. The only thing you do interactively is `gcloud auth login`.
 
-1. Sign in to [neon.tech](https://neon.tech) and create a project (region close to the Cloud Run region).
-2. Create a database called `fit_backend`.
-3. Copy the connection string from the project dashboard (looks like `postgres://user:pass@ep-xxx.us-east-2.aws.neon.tech/fit_backend?sslmode=require`). Paste it into `deploy/.env.cloudrun` as `NEON_DATABASE_URL`.
+## Prereqs
 
-Run migrations and seed from your laptop pointing at Neon:
+```bash
+brew install --cask google-cloud-sdk   # if not already installed
+brew install golang-migrate jq         # already required for local dev
+```
+
+Then:
+
+```bash
+gcloud auth login                       # use your personal Google account
+gcloud config set project fit-cp-backend
+```
+
+## First run
+
+You need three values:
+
+| Var               | Where to find                                                          |
+|-------------------|------------------------------------------------------------------------|
+| `NEON_API_KEY`    | https://console.neon.tech/app/settings/api-keys (create new)           |
+| `NEON_ORG_ID`     | https://console.neon.tech/app/settings/general                         |
+| `GCP_PROJECT`     | The GCP project id you'll deploy into (must have billing enabled)      |
+
+Then:
+
+```bash
+export NEON_API_KEY=napi_...
+export NEON_ORG_ID=org-...
+export GCP_PROJECT=fit-cp-backend
+
+cd backend
+bash deploy/bootstrap.sh
+```
+
+The script prints a per-step ✓/! summary and ends with the deployed Cloud Run URL plus the `/health` response.
+
+## Subsequent deploys (code-only)
+
+After the first bootstrap, redeploys don't need to touch Neon:
 
 ```bash
 cd backend
-DATABASE_URL="postgres://...@neon.tech/fit_backend?sslmode=require" make migrate-up
-DATABASE_URL="postgres://...@neon.tech/fit_backend?sslmode=require" make seed
-```
-
-The seed CLI is idempotent — safe to re-run when the source dataset updates.
-
-## 2. GCP project + APIs
-
-```bash
-export GCP_PROJECT=your-gcp-project
-gcloud config set project ${GCP_PROJECT}
-gcloud services enable \
-  run.googleapis.com \
-  artifactregistry.googleapis.com \
-  secretmanager.googleapis.com \
-  cloudbuild.googleapis.com
-```
-
-## 3. Artifact Registry + image build
-
-Create a repo (one-time):
-
-```bash
-gcloud artifacts repositories create fit --location=us-central1 --repository-format=docker
-```
-
-Build and push the image (re-run on every deploy):
-
-```bash
-cd backend
-gcloud builds submit --tag us-central1-docker.pkg.dev/${GCP_PROJECT}/fit/fit-backend:latest .
-```
-
-`IMAGE_TAG` in `.env.cloudrun` must match what you push.
-
-## 4. Firebase service account (Secret Manager)
-
-1. Open the Firebase console for the `fit-cp-tanmay` project (the same one the Flutter app uses).
-2. Project settings -> Service accounts -> Generate new private key. Download the JSON.
-3. Upload to Secret Manager:
-
-   ```bash
-   gcloud secrets create fit-backend-firebase --data-file=path/to/firebase-creds.json
-   ```
-
-   If updating an existing secret:
-
-   ```bash
-   gcloud secrets versions add fit-backend-firebase --data-file=path/to/firebase-creds.json
-   ```
-
-4. Grant the Cloud Run runtime service account access to the secret. The default service account is `${PROJECT_NUMBER}-compute@developer.gserviceaccount.com`:
-
-   ```bash
-   PROJECT_NUMBER=$(gcloud projects describe ${GCP_PROJECT} --format='value(projectNumber)')
-   gcloud secrets add-iam-policy-binding fit-backend-firebase \
-     --member=serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com \
-     --role=roles/secretmanager.secretAccessor
-   ```
-
-`FIREBASE_CREDS_SECRET=fit-backend-firebase` in `.env.cloudrun`.
-
-## 5. Deploy
-
-```bash
-cd backend
-cp deploy/.env.cloudrun.example deploy/.env.cloudrun
-# edit deploy/.env.cloudrun with values from steps 1-4
-
-# Dry-run first to inspect the resolved gcloud command:
-bash deploy/cloud-run.sh --dry-run
-
-# Then deploy:
+NEON_DATABASE_URL=$(...) \
+GCP_PROJECT=fit-cp-backend \
+FIREBASE_PROJECT_ID=fit-cp-tanmay \
+REGION=us-central1 \
+SERVICE_NAME=fit-backend \
 bash deploy/cloud-run.sh
 ```
 
-The script:
-- Sets `FIREBASE_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS`, `DATABASE_URL` as env vars on the service.
-- Mounts the `fit-backend-firebase` secret at `/secrets/firebase-creds/key.json`.
-- Allows unauthenticated traffic at the Cloud Run layer (the app enforces auth via Firebase ID tokens on every `/v1` request).
+Or set those in `deploy/.env.cloudrun` (gitignored) and just `bash deploy/cloud-run.sh`.
 
-## 6. Smoke test
+`bash deploy/cloud-run.sh --dry-run` prints the resolved gcloud command without applying it.
+
+## What gets created
+
+| Resource                          | Where         | Cost (free tier)         |
+|-----------------------------------|---------------|--------------------------|
+| Neon project `fit-cp-backend`     | aws-us-east-1 | free, autosuspends idle  |
+| GCP Cloud Run service `fit-backend` | us-central1 | free, scales to zero     |
+| Artifact Registry repo `cloud-run-source-deploy` | us-central1 | free up to 0.5 GB |
+| Cloud Build job per deploy        | us-central1   | free first 120 min/day   |
+
+No Firebase service account JSON, no Secret Manager. Cloud Run's runtime ADC is enough to verify Firebase ID tokens (the SDK only needs project id + access to Google's public JWKs).
+
+## Smoke test (manual)
 
 ```bash
 SERVICE_URL=$(gcloud run services describe fit-backend --region us-central1 --format='value(status.url)')
-curl -s ${SERVICE_URL}/healthz
+
+curl -s ${SERVICE_URL}/health
 # {"status":"ok","db":"ok"}
 
-# /v1 should reject without a token:
 curl -s -o /dev/null -w '%{http_code}\n' ${SERVICE_URL}/v1/exercises
-# 401
-```
+# 401 (no token)
 
-To smoke-test an authenticated request, grab a fresh ID token from the Flutter app (Firebase Auth, signed-in user, `user.getIdToken()`) and:
-
-```bash
+# Authenticated: grab an ID token from the Flutter app (Firebase Auth, user.getIdToken())
 TOKEN=...
 curl -s -H "Authorization: Bearer ${TOKEN}" ${SERVICE_URL}/v1/exercises?limit=1 | head -c 400
+```
+
+## Logs
+
+```bash
+gcloud logging read 'resource.type=cloud_run_revision AND resource.labels.service_name=fit-backend' \
+  --project fit-cp-backend --limit 50 --format='value(textPayload)'
 ```

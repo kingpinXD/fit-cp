@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
-# Deploys the fit-cp backend to Cloud Run.
+# Deploys the fit-cp backend to Cloud Run from source.
+#
+# Builds via Cloud Build, pushes to Artifact Registry, deploys in one shot.
+# Cloud Run's runtime service account provides ADC, which the Firebase Admin
+# SDK uses to fetch the public JWKs needed for ID token verification — no
+# Firebase service account JSON or Secret Manager mount required.
 #
 # Usage:
-#   bash deploy/cloud-run.sh            # apply
-#   bash deploy/cloud-run.sh --dry-run  # print resolved gcloud command, change nothing
+#   bash deploy/cloud-run.sh             # apply
+#   bash deploy/cloud-run.sh --dry-run   # print resolved gcloud command, change nothing
 #
-# Required env (loaded from deploy/.env.cloudrun if present, or your shell):
-#   GCP_PROJECT             — target GCP project
-#   REGION                  — e.g. us-central1
-#   SERVICE_NAME            — Cloud Run service name
-#   NEON_DATABASE_URL       — Postgres connection string (Neon)
-#   FIREBASE_PROJECT_ID     — fit-cp Firebase project id
-#   FIREBASE_CREDS_SECRET   — Secret Manager secret name holding service account JSON
-#   IMAGE_TAG               — fully qualified Artifact Registry image to deploy
-#
-# The script mounts FIREBASE_CREDS_SECRET as a file and points
-# GOOGLE_APPLICATION_CREDENTIALS at it so the Admin SDK initializes against the
-# right project.
+# Required env (export in shell, or set in deploy/.env.cloudrun if present):
+#   GCP_PROJECT          target GCP project
+#   REGION               e.g. us-central1
+#   SERVICE_NAME         Cloud Run service name (e.g. fit-backend)
+#   NEON_DATABASE_URL    pooled Postgres connection string
+#   FIREBASE_PROJECT_ID  fit-cp Firebase project id (e.g. fit-cp-tanmay)
 
 set -euo pipefail
 
@@ -34,7 +33,7 @@ if [[ -f "${ENV_FILE}" ]]; then
   set +o allexport
 fi
 
-required=(GCP_PROJECT REGION SERVICE_NAME NEON_DATABASE_URL FIREBASE_PROJECT_ID FIREBASE_CREDS_SECRET IMAGE_TAG)
+required=(GCP_PROJECT REGION SERVICE_NAME NEON_DATABASE_URL FIREBASE_PROJECT_ID)
 missing=()
 for var in "${required[@]}"; do
   if [[ -z "${!var:-}" ]]; then
@@ -43,21 +42,21 @@ for var in "${required[@]}"; do
 done
 if (( ${#missing[@]} > 0 )); then
   echo "missing required vars: ${missing[*]}" >&2
-  echo "populate deploy/.env.cloudrun (see .env.cloudrun.example)" >&2
   exit 1
 fi
 
-CREDS_MOUNT_PATH="/secrets/firebase-creds/key.json"
+BACKEND_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# gcloud run deploy: image, env vars, secret-mount, service account.
-# Health check defaults to GET / which we don't serve, so set startup probe to /healthz.
+# Build + push + deploy from source in one call. gcloud handles Dockerfile detection,
+# Cloud Build invocation, Artifact Registry push, and Cloud Run rollout.
 cmd=(
   gcloud run deploy "${SERVICE_NAME}"
   --project "${GCP_PROJECT}"
   --region "${REGION}"
-  --image "${IMAGE_TAG}"
+  --source "${BACKEND_DIR}"
   --platform managed
   --allow-unauthenticated
+  --quiet
   --port 8080
   --memory 512Mi
   --cpu 1
@@ -65,13 +64,10 @@ cmd=(
   --max-instances 4
   --timeout 30s
   --set-env-vars "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}"
-  --set-env-vars "GOOGLE_APPLICATION_CREDENTIALS=${CREDS_MOUNT_PATH}"
-  --set-env-vars "PORT=8080"
-  --set-env-vars "^@^DATABASE_URL=${NEON_DATABASE_URL}"
-  --set-secrets "${CREDS_MOUNT_PATH}=${FIREBASE_CREDS_SECRET}:latest"
+  --set-env-vars "^|^DATABASE_URL=${NEON_DATABASE_URL}"
 )
 
-printf 'resolved gcloud command:\n'
+echo "resolved gcloud command:"
 printf '  %q ' "${cmd[@]}"
 printf '\n'
 
