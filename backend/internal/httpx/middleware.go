@@ -59,7 +59,8 @@ func newRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// statusRecorder lets the logger see the response status.
+// http.ResponseWriter exposes no status getter after WriteHeader, so we wrap it
+// to capture status and bytes for the access log.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int

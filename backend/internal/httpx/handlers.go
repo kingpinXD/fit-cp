@@ -189,8 +189,6 @@ func (api *API) GetTaxonomy(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// --- helpers -------------------------------------------------------------
-
 func parseIntDefault(raw string, def int) int {
 	if raw == "" {
 		return def
