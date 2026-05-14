@@ -4,12 +4,15 @@ import (
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/kingpinXD/fit-cp/backend/internal/agent"
 )
 
 // RouterDeps wires everything a fully configured router needs.
 type RouterDeps struct {
-	Pool          *pgxpool.Pool
-	AuthMW        func(http.Handler) http.Handler // built by caller, lets tests inject a stub
+	Pool   *pgxpool.Pool
+	AuthMW func(http.Handler) http.Handler // built by caller, lets tests inject a stub
+	Agent  *agent.API                      // optional; nil falls through to a 503 in the handler
 }
 
 // NewRouter returns the full router with /health public and the /v1 surface
@@ -27,6 +30,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 	v1.HandleFunc("GET /v1/exercises", api.ListExercises)
 	v1.HandleFunc("GET /v1/exercises/{id}", api.GetExercise)
 	v1.HandleFunc("GET /v1/taxonomy", api.GetTaxonomy)
+	v1.HandleFunc("POST /v1/agent/chat", deps.Agent.Chat)
 	mux.Handle("/v1/", deps.AuthMW(v1))
 
 	return RecoverMiddleware(RequestIDMiddleware(LoggerMiddleware(mux)))

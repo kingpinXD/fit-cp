@@ -13,8 +13,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/kingpinXD/fit-cp/backend/internal/agent"
 	"github.com/kingpinXD/fit-cp/backend/internal/auth"
 	"github.com/kingpinXD/fit-cp/backend/internal/config"
+	"github.com/kingpinXD/fit-cp/backend/internal/db"
 	"github.com/kingpinXD/fit-cp/backend/internal/httpx"
 )
 
@@ -48,9 +50,14 @@ func run() error {
 		return fmt.Errorf("init auth: %w", err)
 	}
 
+	agentAPI, err := buildAgent(cfg, pool)
+	if err != nil {
+		return fmt.Errorf("init agent: %w", err)
+	}
+
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
-		Handler:           httpx.NewRouter(httpx.RouterDeps{Pool: pool, AuthMW: authMW}),
+		Handler:           httpx.NewRouter(httpx.RouterDeps{Pool: pool, AuthMW: authMW, Agent: agentAPI}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -79,6 +86,15 @@ func run() error {
 	}
 	slog.Info("server stopped")
 	return nil
+}
+
+func buildAgent(cfg config.Config, pool *pgxpool.Pool) (*agent.API, error) {
+	client, err := agent.NewOpenAIClient(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	tools := agent.NewRegistry(db.New(pool))
+	return agent.NewAPI(client, tools, cfg.OpenAIModel), nil
 }
 
 func buildAuthMiddleware(ctx context.Context, cfg config.Config) (func(http.Handler) http.Handler, error) {

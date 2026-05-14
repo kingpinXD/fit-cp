@@ -16,6 +16,7 @@
 #   SERVICE_NAME         Cloud Run service name (e.g. fit-backend)
 #   NEON_DATABASE_URL    pooled Postgres connection string
 #   FIREBASE_PROJECT_ID  fit-cp Firebase project id (e.g. fit-cp-tanmay)
+#   OPENAI_API_KEY       OpenAI key for /v1/agent/chat
 
 set -euo pipefail
 
@@ -33,7 +34,7 @@ if [[ -f "${ENV_FILE}" ]]; then
   set +o allexport
 fi
 
-required=(GCP_PROJECT REGION SERVICE_NAME NEON_DATABASE_URL FIREBASE_PROJECT_ID)
+required=(GCP_PROJECT REGION SERVICE_NAME NEON_DATABASE_URL FIREBASE_PROJECT_ID OPENAI_API_KEY)
 missing=()
 for var in "${required[@]}"; do
   if [[ -z "${!var:-}" ]]; then
@@ -65,6 +66,7 @@ cmd=(
   --timeout 30s
   --set-env-vars "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}"
   --set-env-vars "^|^DATABASE_URL=${NEON_DATABASE_URL}"
+  --set-env-vars "OPENAI_API_KEY=${OPENAI_API_KEY}"
 )
 
 echo "resolved gcloud command:"
