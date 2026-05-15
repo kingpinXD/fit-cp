@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func newTestRegistry(handler ToolHandler) *Registry {
@@ -139,6 +142,70 @@ func TestRunSurfacesToolErrorToModel(t *testing.T) {
 	}
 	if parsed["error"] == "" {
 		t.Errorf("expected an error field, got %q", toolMsg.Content)
+	}
+}
+
+func TestRunDispatchesParallelToolCallsAndPreservesOrder(t *testing.T) {
+	stub := &stubClient{queue: []ChatResponse{
+		multiToolCallReply(
+			ToolCall{ID: "call_a", Function: FunctionCall{Name: "search_exercises", Arguments: `{"muscle":"a"}`}},
+			ToolCall{ID: "call_b", Function: FunctionCall{Name: "search_exercises", Arguments: `{"muscle":"b"}`}},
+			ToolCall{ID: "call_c", Function: FunctionCall{Name: "search_exercises", Arguments: `{"muscle":"c"}`}},
+		),
+		textReply("done"),
+	}}
+
+	// Track in-flight handlers and pause them all until every call has arrived.
+	// Proves the loop actually dispatched in parallel — a serial loop would
+	// deadlock waiting for the first goroutine to return.
+	var inflight atomic.Int32
+	allArrived := make(chan struct{})
+	var once sync.Once
+	tools := newTestRegistry(func(_ context.Context, raw json.RawMessage) (string, error) {
+		if inflight.Add(1) == 3 {
+			once.Do(func() { close(allArrived) })
+		}
+		select {
+		case <-allArrived:
+		case <-time.After(2 * time.Second):
+			t.Errorf("handler did not see all parallel calls within 2s")
+		}
+		var args map[string]string
+		_ = json.Unmarshal(raw, &args)
+		return `"` + args["muscle"] + `"`, nil
+	})
+
+	resp, err := Run(context.Background(), stub, tools, Request{
+		Model:    "gpt-4o-mini",
+		Messages: []Message{{Role: RoleUser, Content: "fan out"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// system, user, assistant(tool_calls), tool, tool, tool, assistant
+	if len(resp.Messages) != 7 {
+		t.Fatalf("want 7 messages, got %d: %+v", len(resp.Messages), resp.Messages)
+	}
+	wantOrder := []struct {
+		callID  string
+		content string
+	}{
+		{"call_a", `"a"`},
+		{"call_b", `"b"`},
+		{"call_c", `"c"`},
+	}
+	for i, want := range wantOrder {
+		got := resp.Messages[3+i]
+		if got.Role != RoleTool {
+			t.Errorf("msg[%d].role: want tool, got %q", 3+i, got.Role)
+		}
+		if got.ToolCallID != want.callID {
+			t.Errorf("msg[%d].tool_call_id: want %q, got %q", 3+i, want.callID, got.ToolCallID)
+		}
+		if got.Content != want.content {
+			t.Errorf("msg[%d].content: want %q, got %q", 3+i, want.content, got.Content)
+		}
 	}
 }
 

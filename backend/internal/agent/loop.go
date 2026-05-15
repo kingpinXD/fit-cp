@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/kingpinXD/fit-cp/backend/internal/httpio"
 )
 
@@ -59,26 +61,43 @@ func Run(ctx context.Context, client LLMClient, tools *Registry, req Request) (R
 			return Response{Messages: messages, Reply: resp.Message.Content}, nil
 		}
 
-		for _, tc := range resp.Message.ToolCalls {
-			result, err := tools.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
+		toolMessages := executeToolCalls(ctx, tools, resp.Message.ToolCalls)
+		messages = append(messages, toolMessages...)
+	}
+	return Response{}, ErrMaxIterations
+}
+
+// executeToolCalls dispatches every tool_call in a single assistant turn in
+// parallel. Order is preserved in the returned slice so the model's
+// position-based references stay valid. Per-call errors are captured into the
+// tool message rather than failing the whole turn — one bad search should not
+// torch the others.
+func executeToolCalls(ctx context.Context, tools *Registry, calls []ToolCall) []Message {
+	results := make([]Message, len(calls))
+	g, gctx := errgroup.WithContext(ctx)
+	for i, tc := range calls {
+		i, tc := i, tc
+		g.Go(func() error {
+			out, err := tools.Execute(gctx, tc.Function.Name, tc.Function.Arguments)
 			if err != nil {
-				// Surface tool failures back to the model rather than aborting the
-				// loop. Log the raw error for ops; show the model a generic
-				// message so we don't leak pgx/internal details into its context.
 				slog.Error("tool execution failed",
 					"tool", tc.Function.Name,
 					"err", err,
-					"request_id", httpio.RequestIDFromContext(ctx))
-				result = genericToolErrorJSON
+					"request_id", httpio.RequestIDFromContext(gctx))
+				out = genericToolErrorJSON
 			}
-			messages = append(messages, Message{
+			results[i] = Message{
 				Role:       RoleTool,
 				ToolCallID: tc.ID,
-				Content:    result,
-			})
-		}
+				Content:    out,
+			}
+			// Never return the error — we want every sibling to finish so the
+			// model sees the full set of results, not whichever raced first.
+			return nil
+		})
 	}
-	return Response{}, ErrMaxIterations
+	_ = g.Wait()
+	return results
 }
 
 func prependSystemPrompt(msgs []Message) []Message {

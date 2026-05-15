@@ -14,6 +14,10 @@ import (
 // emitted; the result string is the tool message content sent back to the model
 // (also expected to be JSON, but the contract is "any string the model can
 // read", same as the OpenAI API).
+//
+// Handler implementations MUST be safe to call concurrently. The loop
+// dispatches parallel tool_calls in parallel goroutines, so any shared state
+// inside a handler needs its own synchronisation.
 type ToolHandler func(ctx context.Context, args json.RawMessage) (string, error)
 
 // Registry pairs tool schemas with their Go handlers.

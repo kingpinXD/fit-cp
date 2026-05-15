@@ -42,13 +42,16 @@ func textReply(content string) ChatResponse {
 }
 
 func toolCallReply(id, name, args string) ChatResponse {
+	return multiToolCallReply(ToolCall{ID: id, Function: FunctionCall{Name: name, Arguments: args}})
+}
+
+// multiToolCallReply packages N tool_calls into a single assistant turn, the
+// way OpenAI's parallel-tool-calling mode emits them.
+func multiToolCallReply(calls ...ToolCall) ChatResponse {
 	return ChatResponse{
 		Message: Message{
-			Role: RoleAssistant,
-			ToolCalls: []ToolCall{{
-				ID:       id,
-				Function: FunctionCall{Name: name, Arguments: args},
-			}},
+			Role:      RoleAssistant,
+			ToolCalls: calls,
 		},
 		FinishReason: FinishReasonToolCalls,
 	}
