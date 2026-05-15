@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kingpinXD/fit-cp/backend/internal/auth"
+	"github.com/kingpinXD/fit-cp/backend/internal/httpio"
 )
 
 type requestIDKey struct{}
@@ -26,7 +27,7 @@ func RecoverMiddleware(next http.Handler) http.Handler {
 					"err", rec,
 					"path", r.URL.Path,
 					"stack", string(debug.Stack()))
-				WriteError(w, "internal_error", http.StatusInternalServerError, "internal server error")
+				httpio.WriteError(w, "internal_error", http.StatusInternalServerError, "internal server error")
 			}
 		}()
 		next.ServeHTTP(w, r)

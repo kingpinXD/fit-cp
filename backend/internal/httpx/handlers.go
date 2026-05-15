@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kingpinXD/fit-cp/backend/internal/db"
+	"github.com/kingpinXD/fit-cp/backend/internal/httpio"
 )
 
 const (
@@ -59,7 +60,7 @@ func (api *API) Healthz(w http.ResponseWriter, r *http.Request) {
 		dbStatus = "error"
 		slog.Warn("db ping failed", "err", err)
 	}
-	WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "db": dbStatus})
+	httpio.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "db": dbStatus})
 }
 
 func (api *API) ListExercises(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +88,7 @@ func (api *API) ListExercises(w http.ResponseWriter, r *http.Request) {
 	rows, err := api.Queries.ListExercises(r.Context(), params)
 	if err != nil {
 		slog.Error("list exercises", "err", err)
-		WriteError(w, "internal_error", http.StatusInternalServerError, "failed to list exercises")
+		httpio.WriteError(w, "internal_error", http.StatusInternalServerError, "failed to list exercises")
 		return
 	}
 	total, err := api.Queries.CountExercises(r.Context(), db.CountExercisesParams{
@@ -98,7 +99,7 @@ func (api *API) ListExercises(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		slog.Error("count exercises", "err", err)
-		WriteError(w, "internal_error", http.StatusInternalServerError, "failed to count exercises")
+		httpio.WriteError(w, "internal_error", http.StatusInternalServerError, "failed to count exercises")
 		return
 	}
 
@@ -109,7 +110,7 @@ func (api *API) ListExercises(w http.ResponseWriter, r *http.Request) {
 	muscles, err := api.Queries.GetMusclesForExercises(r.Context(), ids)
 	if err != nil {
 		slog.Error("muscles for exercises", "err", err)
-		WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch muscles")
+		httpio.WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch muscles")
 		return
 	}
 
@@ -119,7 +120,7 @@ func (api *API) ListExercises(w http.ResponseWriter, r *http.Request) {
 		dtos = append(dtos, toExerciseDTO(e, muscleIndex[e.ID]))
 	}
 
-	WriteJSON(w, http.StatusOK, map[string]any{
+	httpio.WriteJSON(w, http.StatusOK, map[string]any{
 		"exercises": dtos,
 		"total":     total,
 		"limit":     limit,
@@ -132,21 +133,21 @@ func (api *API) GetExercise(w http.ResponseWriter, r *http.Request) {
 	row, err := api.Queries.GetExerciseByID(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			WriteError(w, "not_found", http.StatusNotFound, "exercise not found")
+			httpio.WriteError(w, "not_found", http.StatusNotFound, "exercise not found")
 			return
 		}
 		slog.Error("get exercise", "err", err, "id", id)
-		WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch exercise")
+		httpio.WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch exercise")
 		return
 	}
 	muscles, err := api.Queries.GetMusclesForExercise(r.Context(), id)
 	if err != nil {
 		slog.Error("get muscles", "err", err, "id", id)
-		WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch muscles")
+		httpio.WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch muscles")
 		return
 	}
 	dto := toExerciseDTO(row, toMuscleRows(id, muscles))
-	WriteJSON(w, http.StatusOK, dto)
+	httpio.WriteJSON(w, http.StatusOK, dto)
 }
 
 func (api *API) GetTaxonomy(w http.ResponseWriter, r *http.Request) {
@@ -154,13 +155,13 @@ func (api *API) GetTaxonomy(w http.ResponseWriter, r *http.Request) {
 	muscles, err := api.Queries.ListMuscles(ctx)
 	if err != nil {
 		slog.Error("list muscles", "err", err)
-		WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch taxonomy")
+		httpio.WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch taxonomy")
 		return
 	}
 	equipmentRows, err := api.Queries.ListEquipment(ctx)
 	if err != nil {
 		slog.Error("list equipment", "err", err)
-		WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch taxonomy")
+		httpio.WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch taxonomy")
 		return
 	}
 	equipment := make([]string, 0, len(equipmentRows))
@@ -172,16 +173,16 @@ func (api *API) GetTaxonomy(w http.ResponseWriter, r *http.Request) {
 	levels, err := api.Queries.ListLevels(ctx)
 	if err != nil {
 		slog.Error("list levels", "err", err)
-		WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch taxonomy")
+		httpio.WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch taxonomy")
 		return
 	}
 	categories, err := api.Queries.ListCategories(ctx)
 	if err != nil {
 		slog.Error("list categories", "err", err)
-		WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch taxonomy")
+		httpio.WriteError(w, "internal_error", http.StatusInternalServerError, "failed to fetch taxonomy")
 		return
 	}
-	WriteJSON(w, http.StatusOK, map[string][]string{
+	httpio.WriteJSON(w, http.StatusOK, map[string][]string{
 		"muscles":    muscles,
 		"equipment":  equipment,
 		"levels":     levels,

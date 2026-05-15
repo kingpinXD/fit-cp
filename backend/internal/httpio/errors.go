@@ -1,4 +1,8 @@
-package httpx
+// Package httpio holds the tiny JSON write helpers shared between the agent
+// package and httpx. It lives in its own package so neither importer creates a
+// cycle (httpx wires the agent handler, the agent handler needs the same wire
+// shape — the only way out is a leaf package).
+package httpio
 
 import (
 	"encoding/json"

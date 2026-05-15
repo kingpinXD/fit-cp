@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+
+	"github.com/kingpinXD/fit-cp/backend/internal/httpio"
 )
 
 // API holds the dependencies the agent HTTP handler needs. Constructed once
@@ -35,22 +37,22 @@ type chatResponseBody struct {
 // callers never include it; including one in the request is rejected.
 func (a *API) Chat(w http.ResponseWriter, r *http.Request) {
 	if a == nil || a.Client == nil {
-		writeError(w, "agent_unavailable", http.StatusServiceUnavailable, "agent endpoint is not configured")
+		httpio.WriteError(w, "agent_unavailable", http.StatusServiceUnavailable, "agent endpoint is not configured")
 		return
 	}
 
 	var body chatRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, "invalid_request", http.StatusBadRequest, "request body must be valid JSON")
+		httpio.WriteError(w, "invalid_request", http.StatusBadRequest, "request body must be valid JSON")
 		return
 	}
 	if len(body.Messages) == 0 {
-		writeError(w, "invalid_request", http.StatusBadRequest, "messages must not be empty")
+		httpio.WriteError(w, "invalid_request", http.StatusBadRequest, "messages must not be empty")
 		return
 	}
 	for _, m := range body.Messages {
 		if m.Role == "system" {
-			writeError(w, "invalid_request", http.StatusBadRequest, "system messages are added internally; do not include them")
+			httpio.WriteError(w, "invalid_request", http.StatusBadRequest, "system messages are added internally; do not include them")
 			return
 		}
 	}
@@ -64,41 +66,13 @@ func (a *API) Chat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, ErrMaxIterations) {
 			slog.Warn("agent hit max iterations", "model", model)
-			writeError(w, "agent_max_iterations", http.StatusInternalServerError, "agent exceeded maximum iterations")
+			httpio.WriteError(w, "agent_max_iterations", http.StatusInternalServerError, "agent exceeded maximum iterations")
 			return
 		}
 		slog.Error("agent run", "err", err)
-		writeError(w, "agent_error", http.StatusInternalServerError, "agent failed to produce a reply")
+		httpio.WriteError(w, "agent_error", http.StatusInternalServerError, "agent failed to produce a reply")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, chatResponseBody{Messages: resp.Messages, Reply: resp.Reply})
-}
-
-// writeJSON and writeError duplicate the small helpers in httpx. Inlining them
-// avoids an import cycle (agent ↔ httpx) without dragging in a shared package
-// for two functions.
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		slog.Error("encode response failed", "err", err)
-	}
-}
-
-type errorBody struct {
-	Error errorDetail `json:"error"`
-}
-
-type errorDetail struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func writeError(w http.ResponseWriter, code string, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(errorBody{Error: errorDetail{Code: code, Message: message}}); err != nil {
-		slog.Debug("encode error response failed", "err", err)
-	}
+	httpio.WriteJSON(w, http.StatusOK, chatResponseBody{Messages: resp.Messages, Reply: resp.Reply})
 }
