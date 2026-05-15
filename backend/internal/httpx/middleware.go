@@ -1,7 +1,6 @@
 package httpx
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
@@ -12,10 +11,6 @@ import (
 	"github.com/kingpinXD/fit-cp/backend/internal/auth"
 	"github.com/kingpinXD/fit-cp/backend/internal/httpio"
 )
-
-type requestIDKey struct{}
-
-const requestIDHeader = "X-Request-Id"
 
 // RecoverMiddleware turns a handler panic into a 500 with the standard error shape.
 // Always outermost so it can catch panics from any inner middleware too.
@@ -37,19 +32,13 @@ func RecoverMiddleware(next http.Handler) http.Handler {
 // RequestIDMiddleware reuses an incoming X-Request-Id or generates one.
 func RequestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get(requestIDHeader)
+		id := r.Header.Get(httpio.RequestIDHeader)
 		if id == "" {
 			id = newRequestID()
 		}
-		w.Header().Set(requestIDHeader, id)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id)))
+		w.Header().Set(httpio.RequestIDHeader, id)
+		next.ServeHTTP(w, r.WithContext(httpio.WithRequestID(r.Context(), id)))
 	})
-}
-
-// RequestIDFromContext returns the request id set by RequestIDMiddleware.
-func RequestIDFromContext(ctx context.Context) string {
-	id, _ := ctx.Value(requestIDKey{}).(string)
-	return id
 }
 
 func newRequestID() string {
@@ -97,7 +86,7 @@ func LoggerMiddleware(next http.Handler) http.Handler {
 			"status", rec.status,
 			"bytes", rec.bytes,
 			"duration_ms", time.Since(start).Milliseconds(),
-			"request_id", RequestIDFromContext(r.Context()),
+			"request_id", httpio.RequestIDFromContext(r.Context()),
 			"uid", uid)
 	})
 }

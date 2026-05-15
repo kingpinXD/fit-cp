@@ -111,7 +111,7 @@ func TestRunSurfacesToolErrorToModel(t *testing.T) {
 		textReply("Sorry, something went wrong."),
 	}}
 	tools := newTestRegistry(func(context.Context, json.RawMessage) (string, error) {
-		return "", errors.New("boom")
+		return "", errors.New("pq: syntax error at character 42")
 	})
 
 	resp, err := Run(context.Background(), stub, tools, Request{
@@ -128,16 +128,17 @@ func TestRunSurfacesToolErrorToModel(t *testing.T) {
 	if toolMsg.Role != RoleTool {
 		t.Fatalf("msg[3].role: want tool, got %q", toolMsg.Role)
 	}
-	if !strings.Contains(toolMsg.Content, "boom") {
-		t.Errorf("tool message should surface the error: %q", toolMsg.Content)
+	// The raw error must NOT leak into the model context.
+	if strings.Contains(toolMsg.Content, "pq:") || strings.Contains(toolMsg.Content, "syntax error") {
+		t.Errorf("raw error leaked to model: %q", toolMsg.Content)
 	}
-	// Must be valid JSON so the model can parse it.
+	// The model should see the generic, parseable shape.
 	var parsed map[string]string
 	if err := json.Unmarshal([]byte(toolMsg.Content), &parsed); err != nil {
 		t.Errorf("tool message not valid JSON: %v: %s", err, toolMsg.Content)
 	}
-	if parsed["error"] != "boom" {
-		t.Errorf("parsed error: %q", parsed["error"])
+	if parsed["error"] == "" {
+		t.Errorf("expected an error field, got %q", toolMsg.Content)
 	}
 }
 

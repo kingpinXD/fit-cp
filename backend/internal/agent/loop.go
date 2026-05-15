@@ -3,13 +3,20 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
+	"log/slog"
+
+	"github.com/kingpinXD/fit-cp/backend/internal/httpio"
 )
 
 // maxIterations is a hard safety cap on the tool-use loop. Real flows finish
 // in 1-3 turns; ten is generous and ensures a runaway model can't bill us into
 // next week.
 const maxIterations = 10
+
+// genericToolErrorJSON is what we hand back to the model when a tool blows up.
+// Keeping it generic (a) avoids leaking pgx errors and (b) gives the model a
+// stable shape it can branch on instead of parsing arbitrary error strings.
+const genericToolErrorJSON = `{"error":"tool execution failed; try different arguments"}`
 
 // ErrMaxIterations is returned when the agent loop exceeds maxIterations
 // without the model emitting a final answer. The handler maps it to a 500
@@ -56,9 +63,13 @@ func Run(ctx context.Context, client LLMClient, tools *Registry, req Request) (R
 			result, err := tools.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
 			if err != nil {
 				// Surface tool failures back to the model rather than aborting the
-				// loop. The model can recover (apologize, ask for a different
-				// search) instead of the user seeing a 500.
-				result = fmt.Sprintf(`{"error":%q}`, err.Error())
+				// loop. Log the raw error for ops; show the model a generic
+				// message so we don't leak pgx/internal details into its context.
+				slog.Error("tool execution failed",
+					"tool", tc.Function.Name,
+					"err", err,
+					"request_id", httpio.RequestIDFromContext(ctx))
+				result = genericToolErrorJSON
 			}
 			messages = append(messages, Message{
 				Role:       RoleTool,
