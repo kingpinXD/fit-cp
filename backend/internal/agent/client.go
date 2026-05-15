@@ -14,6 +14,19 @@ import (
 	"github.com/openai/openai-go/shared"
 )
 
+// Role / finish-reason constants mirror the OpenAI Chat Completions vocabulary
+// the rest of this package speaks to. Centralized so we don't get drift between
+// loop, handler, and tests.
+const (
+	RoleSystem    = "system"
+	RoleUser      = "user"
+	RoleAssistant = "assistant"
+	RoleTool      = "tool"
+
+	FinishReasonStop      = "stop"
+	FinishReasonToolCalls = "tool_calls"
+)
+
 // systemPrompt is hardcoded so OpenAI's prompt cache can hit on the prefix
 // across requests. Do not templatize per-request — every per-user variation
 // torches cache reuse.
@@ -122,13 +135,13 @@ func toOpenAIMessages(msgs []Message) []openai.ChatCompletionMessageParamUnion {
 
 func toOpenAIMessage(m Message) openai.ChatCompletionMessageParamUnion {
 	switch m.Role {
-	case "system":
+	case RoleSystem:
 		return openai.SystemMessage(m.Content)
-	case "user":
+	case RoleUser:
 		return openai.UserMessage(m.Content)
-	case "tool":
+	case RoleTool:
 		return openai.ToolMessage(m.Content, m.ToolCallID)
-	case "assistant":
+	case RoleAssistant:
 		assistant := openai.ChatCompletionAssistantMessageParam{}
 		if m.Content != "" {
 			assistant.Content.OfString = openai.String(m.Content)
@@ -172,7 +185,7 @@ func toOpenAITools(defs []ToolDef) []openai.ChatCompletionToolParam {
 }
 
 func fromOpenAIMessage(m openai.ChatCompletionMessage) Message {
-	out := Message{Role: "assistant", Content: m.Content}
+	out := Message{Role: RoleAssistant, Content: m.Content}
 	if len(m.ToolCalls) == 0 {
 		return out
 	}

@@ -30,7 +30,7 @@ func TestRunReturnsTextOnFirstTurn(t *testing.T) {
 
 	resp, err := Run(context.Background(), stub, tools, Request{
 		Model:    "gpt-4o-mini",
-		Messages: []Message{{Role: "user", Content: "hello"}},
+		Messages: []Message{{Role: RoleUser, Content: "hello"}},
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -41,7 +41,7 @@ func TestRunReturnsTextOnFirstTurn(t *testing.T) {
 	if stub.calls != 1 {
 		t.Errorf("calls: want 1, got %d", stub.calls)
 	}
-	wantRoles := []string{"system", "user", "assistant"}
+	wantRoles := []string{RoleSystem, RoleUser, RoleAssistant}
 	gotRoles := roles(resp.Messages)
 	if !equalSlices(gotRoles, wantRoles) {
 		t.Errorf("roles: want %v, got %v", wantRoles, gotRoles)
@@ -61,7 +61,7 @@ func TestRunExecutesToolThenReturnsText(t *testing.T) {
 
 	resp, err := Run(context.Background(), stub, tools, Request{
 		Model:    "gpt-4o-mini",
-		Messages: []Message{{Role: "user", Content: "find a biceps exercise"}},
+		Messages: []Message{{Role: RoleUser, Content: "find a biceps exercise"}},
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -75,7 +75,7 @@ func TestRunExecutesToolThenReturnsText(t *testing.T) {
 	if stub.calls != 2 {
 		t.Errorf("calls: want 2, got %d", stub.calls)
 	}
-	wantRoles := []string{"system", "user", "assistant", "tool", "assistant"}
+	wantRoles := []string{RoleSystem, RoleUser, RoleAssistant, RoleTool, RoleAssistant}
 	gotRoles := roles(resp.Messages)
 	if !equalSlices(gotRoles, wantRoles) {
 		t.Errorf("roles: want %v, got %v", wantRoles, gotRoles)
@@ -95,7 +95,7 @@ func TestRunHitsMaxIterations(t *testing.T) {
 
 	_, err := Run(context.Background(), stub, tools, Request{
 		Model:    "gpt-4o-mini",
-		Messages: []Message{{Role: "user", Content: "loop"}},
+		Messages: []Message{{Role: RoleUser, Content: "loop"}},
 	})
 	if !errors.Is(err, ErrMaxIterations) {
 		t.Fatalf("want ErrMaxIterations, got %v", err)
@@ -116,7 +116,7 @@ func TestRunSurfacesToolErrorToModel(t *testing.T) {
 
 	resp, err := Run(context.Background(), stub, tools, Request{
 		Model:    "gpt-4o-mini",
-		Messages: []Message{{Role: "user", Content: "find exercises"}},
+		Messages: []Message{{Role: RoleUser, Content: "find exercises"}},
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -125,7 +125,7 @@ func TestRunSurfacesToolErrorToModel(t *testing.T) {
 		t.Errorf("reply: %q", resp.Reply)
 	}
 	toolMsg := resp.Messages[3]
-	if toolMsg.Role != "tool" {
+	if toolMsg.Role != RoleTool {
 		t.Fatalf("msg[3].role: want tool, got %q", toolMsg.Role)
 	}
 	if !strings.Contains(toolMsg.Content, "boom") {
@@ -177,7 +177,7 @@ func TestHandlerReturnsReplyAndTrail(t *testing.T) {
 	if stub.lastRequest.Model != "gpt-4o-mini" {
 		t.Errorf("model: want gpt-4o-mini, got %q", stub.lastRequest.Model)
 	}
-	wantRoles := []string{"system", "user", "assistant"}
+	wantRoles := []string{RoleSystem, RoleUser, RoleAssistant}
 	if !equalSlices(roles(got.Messages), wantRoles) {
 		t.Errorf("roles: want %v, got %v", wantRoles, roles(got.Messages))
 	}

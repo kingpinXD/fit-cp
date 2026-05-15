@@ -61,7 +61,7 @@ func Run(ctx context.Context, client LLMClient, tools *Registry, req Request) (R
 				result = fmt.Sprintf(`{"error":%q}`, err.Error())
 			}
 			messages = append(messages, Message{
-				Role:       "tool",
+				Role:       RoleTool,
 				ToolCallID: tc.ID,
 				Content:    result,
 			})
@@ -72,7 +72,7 @@ func Run(ctx context.Context, client LLMClient, tools *Registry, req Request) (R
 
 func prependSystemPrompt(msgs []Message) []Message {
 	out := make([]Message, 0, len(msgs)+1)
-	out = append(out, Message{Role: "system", Content: systemPrompt})
+	out = append(out, Message{Role: RoleSystem, Content: systemPrompt})
 	out = append(out, msgs...)
 	return out
 }

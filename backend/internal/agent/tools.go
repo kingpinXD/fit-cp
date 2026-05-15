@@ -136,7 +136,7 @@ func runSearchExercises(ctx context.Context, q *db.Queries, args searchExercises
 
 	results := make([]searchExercisesResult, 0, len(rows))
 	if len(rows) == 0 {
-		return mustMarshal(results), nil
+		return marshalResult(results)
 	}
 
 	ids := make([]string, 0, len(rows))
@@ -170,7 +170,15 @@ func runSearchExercises(ctx context.Context, q *db.Queries, args searchExercises
 		}
 		results = append(results, r)
 	}
-	return mustMarshal(results), nil
+	return marshalResult(results)
+}
+
+func marshalResult(v any) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("marshal tool result: %w", err)
+	}
+	return string(b), nil
 }
 
 func optText(s string) pgtype.Text {
@@ -178,16 +186,4 @@ func optText(s string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: s, Valid: true}
-}
-
-// mustMarshal panics only on impossible inputs (a slice of plain structs).
-// Inside a tool handler we'd surface the error, but here the recover in the
-// HTTP middleware catches it and returns 500 — which is correct for a JSON
-// encoding bug.
-func mustMarshal(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(fmt.Sprintf("marshal tool result: %v", err))
-	}
-	return string(b)
 }

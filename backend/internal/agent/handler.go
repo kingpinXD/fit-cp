@@ -51,7 +51,7 @@ func (a *API) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, m := range body.Messages {
-		if m.Role == "system" {
+		if m.Role == RoleSystem {
 			httpio.WriteError(w, "invalid_request", http.StatusBadRequest, "system messages are added internally; do not include them")
 			return
 		}

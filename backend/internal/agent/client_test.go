@@ -36,20 +36,20 @@ func (s *stubClient) Chat(_ context.Context, req ChatRequest) (ChatResponse, err
 
 func textReply(content string) ChatResponse {
 	return ChatResponse{
-		Message:      Message{Role: "assistant", Content: content},
-		FinishReason: "stop",
+		Message:      Message{Role: RoleAssistant, Content: content},
+		FinishReason: FinishReasonStop,
 	}
 }
 
 func toolCallReply(id, name, args string) ChatResponse {
 	return ChatResponse{
 		Message: Message{
-			Role: "assistant",
+			Role: RoleAssistant,
 			ToolCalls: []ToolCall{{
 				ID:       id,
 				Function: FunctionCall{Name: name, Arguments: args},
 			}},
 		},
-		FinishReason: "tool_calls",
+		FinishReason: FinishReasonToolCalls,
 	}
 }
