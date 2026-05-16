@@ -60,6 +60,9 @@ ON CONFLICT (id) DO UPDATE SET
 -- name: ExerciseExists :one
 SELECT EXISTS(SELECT 1 FROM exercises WHERE id = $1);
 
+-- name: ExerciseExistsByIDs :many
+SELECT id FROM exercises WHERE id = ANY($1::text[]);
+
 -- name: DeleteMusclesForExercise :exec
 DELETE FROM exercise_muscles WHERE exercise_id = $1;
 

@@ -14,6 +14,7 @@ type Querier interface {
 	CountExercises(ctx context.Context, arg CountExercisesParams) (int64, error)
 	DeleteMusclesForExercise(ctx context.Context, exerciseID string) error
 	ExerciseExists(ctx context.Context, id string) (bool, error)
+	ExerciseExistsByIDs(ctx context.Context, dollar_1 []string) ([]string, error)
 	GetExerciseByID(ctx context.Context, id string) (Exercise, error)
 	GetMusclesForExercise(ctx context.Context, exerciseID string) ([]GetMusclesForExerciseRow, error)
 	GetMusclesForExercises(ctx context.Context, dollar_1 []string) ([]ExerciseMuscle, error)

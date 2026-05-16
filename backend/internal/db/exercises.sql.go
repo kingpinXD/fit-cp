@@ -61,6 +61,30 @@ func (q *Queries) ExerciseExists(ctx context.Context, id string) (bool, error) {
 	return exists, err
 }
 
+const exerciseExistsByIDs = `-- name: ExerciseExistsByIDs :many
+SELECT id FROM exercises WHERE id = ANY($1::text[])
+`
+
+func (q *Queries) ExerciseExistsByIDs(ctx context.Context, dollar_1 []string) ([]string, error) {
+	rows, err := q.db.Query(ctx, exerciseExistsByIDs, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getExerciseByID = `-- name: GetExerciseByID :one
 SELECT id, name, force, level, mechanic, equipment,
        category, instructions, image_urls,

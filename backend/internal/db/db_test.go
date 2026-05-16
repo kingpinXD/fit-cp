@@ -44,3 +44,25 @@ func TestGetMusclesForExercise(t *testing.T) {
 		t.Fatalf("want 2 muscles, got %d", len(rows))
 	}
 }
+
+func TestExerciseExistsByIDsReturnsKnownSubset(t *testing.T) {
+	pool := testhelpers.RequireDB(t)
+	testhelpers.SeedFixtures(t, pool)
+	q := db.New(pool)
+
+	got, err := q.ExerciseExistsByIDs(context.Background(),
+		[]string{"Barbell_Curl", "ghost_lift", "Squat", "made_up"})
+	if err != nil {
+		t.Fatalf("ExerciseExistsByIDs: %v", err)
+	}
+
+	want := map[string]bool{"Barbell_Curl": true, "Squat": true}
+	if len(got) != len(want) {
+		t.Fatalf("want %d rows, got %d (%v)", len(want), len(got), got)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("unexpected id %q", id)
+		}
+	}
+}
