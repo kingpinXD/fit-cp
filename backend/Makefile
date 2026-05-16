@@ -13,7 +13,7 @@ DATABASE_URL ?= postgres://fit:fit@localhost:5432/fit_backend?sslmode=disable
 # docker-compose connection.
 TEST_DATABASE_URL ?= postgres://fit:fit@localhost:5432/fit_backend?sslmode=disable
 
-.PHONY: run test build lint vet sqlc seed \
+.PHONY: run test build lint vet sqlc seed ingest-variants \
         migrate-up migrate-down migrate-new \
         docker-up docker-down docker-logs
 
@@ -39,6 +39,10 @@ sqlc:
 
 seed:
 	DATABASE_URL=$(DATABASE_URL) go run ./cmd/seed
+
+# usage: make ingest-variants ARGS="--dry-run"
+ingest-variants:
+	DATABASE_URL=$(DATABASE_URL) go run ./cmd/ingest_variants --db "$(DATABASE_URL)" $(ARGS)
 
 migrate-up:
 	migrate -database "$(DATABASE_URL)" -path ./migrations up
