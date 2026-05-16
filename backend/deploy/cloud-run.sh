@@ -63,7 +63,7 @@ cmd=(
   --cpu 1
   --min-instances 0
   --max-instances 4
-  --timeout 30s
+  --timeout 300s
   --set-env-vars "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}"
   --set-env-vars "^|^DATABASE_URL=${NEON_DATABASE_URL}"
   --set-env-vars "OPENAI_API_KEY=${OPENAI_API_KEY}"
