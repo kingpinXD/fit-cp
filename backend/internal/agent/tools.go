@@ -27,11 +27,11 @@ type Registry struct {
 }
 
 // NewRegistry returns a Registry seeded with every built-in tool wired to the
-// given Queries. Today there is only one tool; if more come, register them
-// here.
+// given Queries. ResolveTools decides which of these are exposed per mode.
 func NewRegistry(q *db.Queries) *Registry {
 	r := &Registry{handlers: map[string]ToolHandler{}}
 	r.register(searchExercisesTool(q))
+	r.register(proposeProgrammeTool(q))
 	return r
 }
 
@@ -207,4 +207,184 @@ func optText(s string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: s, Valid: true}
+}
+
+// proposeProgrammeArgs mirrors the JSON Schema we advertise on the tool, with
+// json.RawMessage on the leaf programme so we can echo the model's exact
+// payload back unchanged on success.
+type proposeProgrammeArgs struct {
+	Name  string                 `json:"name"`
+	Weeks []proposeProgrammeWeek `json:"weeks"`
+}
+
+type proposeProgrammeWeek struct {
+	WeekNumber int                   `json:"week_number"`
+	Days       []proposeProgrammeDay `json:"days"`
+}
+
+type proposeProgrammeDay struct {
+	DayName   string                     `json:"day_name"`
+	Exercises []proposeProgrammeExercise `json:"exercises"`
+}
+
+type proposeProgrammeExercise struct {
+	ExerciseID   string `json:"exercise_id"`
+	ExerciseName string `json:"exercise_name"`
+	Sets         int    `json:"sets"`
+	Reps         string `json:"reps"`
+	RPE          string `json:"rpe,omitempty"`
+	Rest         string `json:"rest,omitempty"`
+	WarmupSets   string `json:"warmup_sets,omitempty"`
+	Notes        string `json:"notes,omitempty"`
+	Sub1         string `json:"sub1,omitempty"`
+	Sub2         string `json:"sub2,omitempty"`
+}
+
+// proposeProgrammeResult is the stable shape Flutter detects in the message
+// trail. "ok" means every exercise id resolved; "invalid" lists the missing
+// ids so the model can self-correct on the next turn.
+type proposeProgrammeResult struct {
+	Status    string          `json:"status"`
+	Missing   []string        `json:"missing,omitempty"`
+	Error     string          `json:"error,omitempty"`
+	Programme json.RawMessage `json:"programme,omitempty"`
+}
+
+// proposeProgrammeTool builds the Coach's final-output tool. The handler
+// validates every exercise_id exists in the catalog and echoes the programme
+// back as JSON on success.
+func proposeProgrammeTool(q *db.Queries) (ToolDef, ToolHandler) {
+	def := ToolDef{
+		Name:        "propose_programme",
+		Description: "Submit a complete workout programme. Every exercise must come from search_exercises results. Backend validates exercise ids exist before returning.",
+		Parameters:  proposeProgrammeSchema(),
+	}
+	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
+		return runProposeProgramme(ctx, q, raw)
+	}
+	return def, handler
+}
+
+func runProposeProgramme(ctx context.Context, q *db.Queries, raw json.RawMessage) (string, error) {
+	var args proposeProgrammeArgs
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return "", fmt.Errorf("parse args: %w", err)
+		}
+	}
+
+	ids := collectExerciseIDs(args)
+	if len(ids) == 0 {
+		return marshalResult(proposeProgrammeResult{
+			Status:  "invalid",
+			Missing: []string{},
+			Error:   "programme has no exercises",
+		})
+	}
+
+	found, err := q.ExerciseExistsByIDs(ctx, ids)
+	if err != nil {
+		return "", fmt.Errorf("exercise exists by ids: %w", err)
+	}
+	missing := diffIDs(ids, found)
+	if len(missing) > 0 {
+		return marshalResult(proposeProgrammeResult{
+			Status:  "invalid",
+			Missing: missing,
+			Error:   "exercises not found in catalog",
+		})
+	}
+
+	return marshalResult(proposeProgrammeResult{
+		Status:    "ok",
+		Programme: raw,
+	})
+}
+
+// collectExerciseIDs walks the programme and returns every distinct
+// exercise_id in the order they first appear, skipping blanks.
+func collectExerciseIDs(p proposeProgrammeArgs) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0)
+	for _, w := range p.Weeks {
+		for _, d := range w.Days {
+			for _, e := range d.Exercises {
+				if e.ExerciseID == "" || seen[e.ExerciseID] {
+					continue
+				}
+				seen[e.ExerciseID] = true
+				out = append(out, e.ExerciseID)
+			}
+		}
+	}
+	return out
+}
+
+func diffIDs(want, have []string) []string {
+	got := make(map[string]bool, len(have))
+	for _, id := range have {
+		got[id] = true
+	}
+	missing := make([]string, 0)
+	for _, id := range want {
+		if !got[id] {
+			missing = append(missing, id)
+		}
+	}
+	return missing
+}
+
+func proposeProgrammeSchema() map[string]any {
+	exerciseProps := map[string]any{
+		"exercise_id":   map[string]any{"type": "string"},
+		"exercise_name": map[string]any{"type": "string"},
+		"sets":          map[string]any{"type": "integer", "minimum": 1},
+		"reps":          map[string]any{"type": "string"},
+		"rpe":           map[string]any{"type": "string"},
+		"rest":          map[string]any{"type": "string"},
+		"warmup_sets":   map[string]any{"type": "string"},
+		"notes":         map[string]any{"type": "string"},
+		"sub1":          map[string]any{"type": "string"},
+		"sub2":          map[string]any{"type": "string"},
+	}
+	dayProps := map[string]any{
+		"day_name": map[string]any{"type": "string"},
+		"exercises": map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type":       "object",
+				"properties": exerciseProps,
+				"required":   []string{"exercise_id", "exercise_name", "sets", "reps"},
+			},
+		},
+	}
+	weekProps := map[string]any{
+		"week_number": map[string]any{"type": "integer", "minimum": 1},
+		"days": map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type":       "object",
+				"properties": dayProps,
+				"required":   []string{"day_name", "exercises"},
+			},
+		},
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{
+				"type":        "string",
+				"description": "Programme name, e.g. 'Coach: 4-day PPL'",
+			},
+			"weeks": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":       "object",
+					"properties": weekProps,
+					"required":   []string{"week_number", "days"},
+				},
+			},
+		},
+		"required": []string{"name", "weeks"},
+	}
 }

@@ -26,6 +26,7 @@ func NewAPI(client LLMClient, tools *Registry, defaultModel string) *API {
 type chatRequestBody struct {
 	Messages []Message `json:"messages"`
 	Model    string    `json:"model"`
+	Mode     Mode      `json:"mode,omitempty"`
 }
 
 type chatResponseBody struct {
@@ -56,13 +57,17 @@ func (a *API) Chat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if !isValidMode(body.Mode) {
+		httpio.WriteError(w, "invalid_mode", http.StatusBadRequest, "mode must be \"chat\", \"coach\", or omitted")
+		return
+	}
 
 	model := body.Model
 	if model == "" {
 		model = a.DefaultModel
 	}
 
-	resp, err := Run(r.Context(), a.Client, a.Tools, Request{Model: model, Messages: body.Messages})
+	resp, err := Run(r.Context(), a.Client, a.Tools, Request{Model: model, Messages: body.Messages, Mode: body.Mode})
 	if err != nil {
 		if errors.Is(err, ErrMaxIterations) {
 			slog.Warn("agent hit max iterations", "model", model)

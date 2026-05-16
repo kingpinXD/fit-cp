@@ -263,6 +263,110 @@ func TestHandlerHonorsRequestModel(t *testing.T) {
 	}
 }
 
+func TestHandlerEmptyModeUsesChatPrompt(t *testing.T) {
+	stub := &stubClient{queue: []ChatResponse{textReply("ok")}}
+	api := NewAPI(stub, newTestRegistry(func(context.Context, json.RawMessage) (string, error) { return "", nil }), "gpt-4o-mini")
+	rec := postJSON(api.Chat, `{"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := stub.lastRequest.Messages[0].Content; got != chatSystemPrompt {
+		t.Errorf("system prompt: want chat prompt, got %q", got)
+	}
+}
+
+func TestHandlerCoachModeUsesCoachPromptAndExposesProposeTool(t *testing.T) {
+	stub := &stubClient{queue: []ChatResponse{textReply("ok")}}
+	reg := &Registry{handlers: map[string]ToolHandler{}}
+	reg.register(ToolDef{Name: "search_exercises", Parameters: map[string]any{"type": "object"}}, nil)
+	reg.register(ToolDef{Name: "propose_programme", Parameters: map[string]any{"type": "object"}}, nil)
+	api := NewAPI(stub, reg, "gpt-4o-mini")
+
+	rec := postJSON(api.Chat, `{"mode":"coach","messages":[{"role":"user","content":"design a programme"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := stub.lastRequest.Messages[0].Content; got != coachSystemPrompt {
+		t.Errorf("system prompt: want coach prompt, got %q", got)
+	}
+	gotTools := map[string]bool{}
+	for _, td := range stub.lastRequest.Tools {
+		gotTools[td.Name] = true
+	}
+	if !gotTools["search_exercises"] || !gotTools["propose_programme"] {
+		t.Errorf("coach tools: want search_exercises + propose_programme, got %v", gotTools)
+	}
+}
+
+func TestHandlerRejectsUnknownMode(t *testing.T) {
+	api := NewAPI(&stubClient{}, newTestRegistry(func(context.Context, json.RawMessage) (string, error) { return "", nil }), "gpt-4o-mini")
+	rec := postJSON(api.Chat, `{"mode":"banana","messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "invalid_mode") {
+		t.Errorf("body should mention invalid_mode, got %s", rec.Body.String())
+	}
+}
+
+func TestHandlerCoachModeEndToEndStub(t *testing.T) {
+	stub := &stubClient{queue: []ChatResponse{
+		toolCallReply("call_1", "propose_programme", validProgrammeFixtureJSON()),
+		textReply("Here's your programme."),
+	}}
+	api := NewAPI(stub, coachToolStubRegistry(), "gpt-4o-mini")
+
+	rec := postJSON(api.Chat, `{"mode":"coach","messages":[{"role":"user","content":"build it"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got chatResponseBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Reply != "Here's your programme." {
+		t.Errorf("reply: want final assistant text, got %q", got.Reply)
+	}
+	// system, user, assistant(tool_call), tool, assistant
+	if len(got.Messages) != 5 {
+		t.Fatalf("want 5 messages, got %d", len(got.Messages))
+	}
+	if got.Messages[3].Role != RoleTool {
+		t.Fatalf("msg[3].role: want tool, got %q", got.Messages[3].Role)
+	}
+	var parsed struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(got.Messages[3].Content), &parsed); err != nil {
+		t.Fatalf("decode tool message: %v: %s", err, got.Messages[3].Content)
+	}
+	if parsed.Status != "ok" {
+		t.Errorf("tool status: want ok, got %q", parsed.Status)
+	}
+}
+
+// validProgrammeFixtureJSON mirrors validProgrammeJSON in tools_test.go but
+// lives in the in-package test file so we can stitch it into the coach
+// end-to-end test without crossing packages.
+func validProgrammeFixtureJSON() string {
+	return `{"name":"Coach: test","weeks":[{"week_number":1,"days":[{"day_name":"A","exercises":[{"exercise_id":"Barbell_Curl","exercise_name":"Barbell Curl","sets":3,"reps":"8-10"}]}]}]}`
+}
+
+// coachToolStubRegistry registers stub handlers for both Coach tools. The
+// propose_programme handler returns the canonical "ok" envelope without
+// touching the database, so the end-to-end handler test can run without
+// TEST_DATABASE_URL.
+func coachToolStubRegistry() *Registry {
+	r := &Registry{handlers: map[string]ToolHandler{}}
+	r.register(ToolDef{Name: "search_exercises", Parameters: map[string]any{"type": "object"}},
+		func(context.Context, json.RawMessage) (string, error) { return `[]`, nil })
+	r.register(ToolDef{Name: "propose_programme", Parameters: map[string]any{"type": "object"}},
+		func(_ context.Context, raw json.RawMessage) (string, error) {
+			return `{"status":"ok","programme":` + string(raw) + `}`, nil
+		})
+	return r
+}
+
 func postJSON(handler http.HandlerFunc, body string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent/chat", bytes.NewBufferString(body))

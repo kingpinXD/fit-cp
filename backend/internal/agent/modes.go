@@ -1,5 +1,15 @@
 package agent
 
+// isValidMode reports whether mode is one the handler will accept. Empty is
+// allowed and means "default to ModeChat" inside Run.
+func isValidMode(mode Mode) bool {
+	switch mode {
+	case "", ModeChat, ModeCoach:
+		return true
+	}
+	return false
+}
+
 // ResolveSystemPrompt picks the right system prompt for the mode.
 // Falls back to the chat prompt for unknown modes (defensive only;
 // handler should reject unknown modes upstream).
