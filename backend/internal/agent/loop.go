@@ -10,26 +10,23 @@ import (
 	"github.com/kingpinXD/fit-cp/backend/internal/httpio"
 )
 
-// maxIterations is a hard safety cap on the tool-use loop. Real flows finish
-// in 1-3 turns; ten is generous and ensures a runaway model can't bill us into
-// next week.
-const maxIterations = 10
-
 // genericToolErrorJSON is what we hand back to the model when a tool blows up.
 // Keeping it generic (a) avoids leaking pgx errors and (b) gives the model a
 // stable shape it can branch on instead of parsing arbitrary error strings.
 const genericToolErrorJSON = `{"error":"tool execution failed; try different arguments"}`
 
-// ErrMaxIterations is returned when the agent loop exceeds maxIterations
+// ErrMaxIterations is returned when the agent loop exceeds MaxIterations
 // without the model emitting a final answer. The handler maps it to a 500
 // with code "agent_max_iterations".
 var ErrMaxIterations = errors.New("agent exceeded max iterations")
 
 // Request is what the handler hands to Run. Messages must be non-empty and
-// must not include a system message — Run prepends one internally.
+// must not include a system message — Run prepends one internally. Mode
+// selects the system prompt + tool subset; empty defaults to ModeChat.
 type Request struct {
 	Model    string
 	Messages []Message
+	Mode     Mode
 }
 
 // Response is the full message trail plus the final assistant reply for
@@ -43,10 +40,10 @@ type Response struct {
 // Run drives the tool-use loop: call the model, if it asked for tools execute
 // them and append the results, otherwise return the assistant text.
 func Run(ctx context.Context, client LLMClient, tools *Registry, req Request) (Response, error) {
-	messages := prependSystemPrompt(req.Messages)
-	defs := tools.Definitions()
+	messages := prependSystemPrompt(req.Messages, req.Mode)
+	defs := ResolveTools(req.Mode, tools)
 
-	for i := 0; i < maxIterations; i++ {
+	for i := 0; i < MaxIterations; i++ {
 		resp, err := client.Chat(ctx, ChatRequest{
 			Model:    req.Model,
 			Messages: messages,
@@ -100,9 +97,9 @@ func executeToolCalls(ctx context.Context, tools *Registry, calls []ToolCall) []
 	return results
 }
 
-func prependSystemPrompt(msgs []Message) []Message {
+func prependSystemPrompt(msgs []Message, mode Mode) []Message {
 	out := make([]Message, 0, len(msgs)+1)
-	out = append(out, Message{Role: RoleSystem, Content: systemPrompt})
+	out = append(out, Message{Role: RoleSystem, Content: ResolveSystemPrompt(mode)})
 	out = append(out, msgs...)
 	return out
 }

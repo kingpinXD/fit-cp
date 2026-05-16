@@ -103,8 +103,8 @@ func TestRunHitsMaxIterations(t *testing.T) {
 	if !errors.Is(err, ErrMaxIterations) {
 		t.Fatalf("want ErrMaxIterations, got %v", err)
 	}
-	if stub.calls != maxIterations {
-		t.Errorf("calls: want %d, got %d", maxIterations, stub.calls)
+	if stub.calls != MaxIterations {
+		t.Errorf("calls: want %d, got %d", MaxIterations, stub.calls)
 	}
 }
 

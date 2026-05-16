@@ -14,28 +14,6 @@ import (
 	"github.com/openai/openai-go/shared"
 )
 
-// Role / finish-reason constants mirror the OpenAI Chat Completions vocabulary
-// the rest of this package speaks to. Centralized so we don't get drift between
-// loop, handler, and tests.
-const (
-	RoleSystem    = "system"
-	RoleUser      = "user"
-	RoleAssistant = "assistant"
-	RoleTool      = "tool"
-
-	FinishReasonStop      = "stop"
-	FinishReasonToolCalls = "tool_calls"
-)
-
-// systemPrompt is hardcoded so OpenAI's prompt cache can hit on the prefix
-// across requests. Do not templatize per-request — every per-user variation
-// torches cache reuse.
-const systemPrompt = `You are a fitness assistant inside the fit-cp app. You help users find exercises and plan workouts.
-
-Use the search_exercises tool whenever the user asks about specific exercises. Never invent exercises that don't exist in the catalog.
-
-Reply concisely. When listing exercises, include the name and primary muscle.`
-
 // Message is the agent package's own wire shape. We translate to/from the
 // OpenAI SDK types inside openaiClient.Chat so the rest of the package never
 // touches SDK types.

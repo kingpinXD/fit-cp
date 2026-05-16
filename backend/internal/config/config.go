@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/kingpinXD/fit-cp/backend/internal/agent"
 )
 
 // Config holds runtime configuration loaded from environment variables once at startup.
@@ -23,8 +25,10 @@ type Config struct {
 	OpenAIModel   string
 }
 
-// DefaultOpenAIModel is the fallback model when OPENAI_MODEL is unset.
-const DefaultOpenAIModel = "gpt-4o-mini"
+// DefaultOpenAIModel is the fallback model when OPENAI_MODEL is unset. It
+// re-exports agent.DefaultModel so the env-loading layer doesn't carry its
+// own copy.
+const DefaultOpenAIModel = agent.DefaultModel
 
 // Load reads required environment variables and returns a Config. Returns an error
 // listing every missing required variable so the operator sees the full picture at once.

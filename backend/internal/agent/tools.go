@@ -45,6 +45,23 @@ func (r *Registry) Definitions() []ToolDef {
 	return r.defs
 }
 
+// SubsetDefs returns the subset of tool definitions whose names match.
+// Unknown names are silently skipped — callers (ResolveTools) only ever pass
+// names registered at startup, so a miss means the registry wiring is wrong.
+func (r *Registry) SubsetDefs(names ...string) []ToolDef {
+	wanted := make(map[string]bool, len(names))
+	for _, n := range names {
+		wanted[n] = true
+	}
+	out := make([]ToolDef, 0, len(names))
+	for _, d := range r.defs {
+		if wanted[d.Name] {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // Execute runs the named tool. Unknown tools return an error so the loop can
 // surface the failure back to the model as a tool result.
 func (r *Registry) Execute(ctx context.Context, name string, args string) (string, error) {
