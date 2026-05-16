@@ -11,6 +11,7 @@ import (
 )
 
 type Querier interface {
+	CountExerciseVariants(ctx context.Context) (int64, error)
 	CountExercises(ctx context.Context, arg CountExercisesParams) (int64, error)
 	DeleteMusclesForExercise(ctx context.Context, exerciseID string) error
 	ExerciseExists(ctx context.Context, id string) (bool, error)
@@ -23,7 +24,12 @@ type Querier interface {
 	ListExercises(ctx context.Context, arg ListExercisesParams) ([]Exercise, error)
 	ListLevels(ctx context.Context) ([]string, error)
 	ListMuscles(ctx context.Context) ([]string, error)
+	ListVariantsForExercise(ctx context.Context, exerciseID string) ([]ExerciseVariant, error)
+	// Trigram similarity against the catalog. Returns top N matches above the operator threshold.
+	SearchExerciseByFuzzyName(ctx context.Context, arg SearchExerciseByFuzzyNameParams) ([]SearchExerciseByFuzzyNameRow, error)
 	UpsertExercise(ctx context.Context, arg UpsertExerciseParams) error
+	// Returns true when a new row was inserted, false when an existing variant was updated.
+	UpsertExerciseVariant(ctx context.Context, arg UpsertExerciseVariantParams) (bool, error)
 }
 
 var _ Querier = (*Queries)(nil)

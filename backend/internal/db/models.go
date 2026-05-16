@@ -27,3 +27,12 @@ type ExerciseMuscle struct {
 	Muscle     string `json:"muscle"`
 	Role       string `json:"role"`
 }
+
+type ExerciseVariant struct {
+	ID          int64              `json:"id"`
+	ExerciseID  string             `json:"exercise_id"`
+	VariantName string             `json:"variant_name"`
+	Description pgtype.Text        `json:"description"`
+	Source      string             `json:"source"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
