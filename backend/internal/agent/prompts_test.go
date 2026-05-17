@@ -30,9 +30,21 @@ func TestCoachSystemPromptCoversKeyConcepts(t *testing.T) {
 		"search_exercises",
 		"Days per week",
 		"Experience",
+		"12 weeks",
+		"3 mesocycle blocks",
+		"Push",
+		"Upper",
+		"Block 1",
 	} {
 		if !strings.Contains(coachSystemPrompt, want) {
 			t.Errorf("coach prompt missing %q", want)
+		}
+	}
+	// The Coach must not teach the model to use placeholder day labels — the
+	// validator rejects them, so emitting one wastes a round-trip.
+	for _, banned := range []string{"Day 1", "Day 2", "Workout 1", "Session 1"} {
+		if strings.Contains(coachSystemPrompt, banned) {
+			t.Errorf("coach prompt should not contain placeholder example %q", banned)
 		}
 	}
 }
