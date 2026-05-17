@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/kingpinXD/fit-cp/backend/internal/agent"
@@ -10,11 +11,22 @@ import (
 	"github.com/kingpinXD/fit-cp/backend/internal/testhelpers"
 )
 
-func newRegistry(t *testing.T) *agent.Registry {
+// newCatalogRegistry returns a registry wired to a seeded local DB. Tests
+// that need catalog name resolution (the "ok" path and the missing-id path)
+// use this.
+func newCatalogRegistry(t *testing.T) *agent.Registry {
 	t.Helper()
 	pool := testhelpers.RequireDB(t)
 	testhelpers.SeedFixtures(t, pool)
 	return agent.NewRegistry(db.New(pool))
+}
+
+// newStructuralRegistry returns a registry wired against a nil DBTX. The
+// propose_programme handler short-circuits before touching the DB whenever
+// structural validation fails, so these tests can run with no Postgres at
+// all — useful in CI and on contributors who don't have docker running.
+func newStructuralRegistry() *agent.Registry {
+	return agent.NewRegistry(db.New(nil))
 }
 
 type toolResult struct {
@@ -26,7 +38,7 @@ type toolResult struct {
 }
 
 func TestSearchExercisesByMuscle(t *testing.T) {
-	reg := newRegistry(t)
+	reg := newCatalogRegistry(t)
 	out, err := reg.Execute(context.Background(), "search_exercises", `{"muscle":"biceps"}`)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -41,7 +53,6 @@ func TestSearchExercisesByMuscle(t *testing.T) {
 	names := map[string]bool{}
 	for _, r := range got {
 		names[r.Name] = true
-		// Sanity-check the slim DTO carries the fields we promised.
 		if r.Level == "" {
 			t.Errorf("level missing on %s", r.ID)
 		}
@@ -57,14 +68,11 @@ func TestSearchExercisesByMuscle(t *testing.T) {
 }
 
 func TestSearchExercisesLimitClampedTo25(t *testing.T) {
-	reg := newRegistry(t)
+	reg := newCatalogRegistry(t)
 	out, err := reg.Execute(context.Background(), "search_exercises", `{"limit":100}`)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	// The fixture only has 3 exercises, so we can't observe a 25-row cap by
-	// counting results. Instead, verify the call doesn't error and returns
-	// every available row — the cap is a ceiling, not a floor.
 	var got []toolResult
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("decode: %v: %s", err, out)
@@ -75,7 +83,7 @@ func TestSearchExercisesLimitClampedTo25(t *testing.T) {
 }
 
 func TestSearchExercisesUnknownMuscleReturnsEmptyArray(t *testing.T) {
-	reg := newRegistry(t)
+	reg := newCatalogRegistry(t)
 	out, err := reg.Execute(context.Background(), "search_exercises", `{"muscle":"telekinesis"}`)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -86,7 +94,7 @@ func TestSearchExercisesUnknownMuscleReturnsEmptyArray(t *testing.T) {
 }
 
 func TestSearchExercisesEmptyArgsUsesDefaults(t *testing.T) {
-	reg := newRegistry(t)
+	reg := newCatalogRegistry(t)
 	out, err := reg.Execute(context.Background(), "search_exercises", ``)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -101,14 +109,14 @@ func TestSearchExercisesEmptyArgsUsesDefaults(t *testing.T) {
 }
 
 func TestSearchExercisesUnknownToolErrors(t *testing.T) {
-	reg := newRegistry(t)
+	reg := newStructuralRegistry()
 	if _, err := reg.Execute(context.Background(), "make_coffee", `{}`); err == nil {
 		t.Fatal("expected error for unknown tool")
 	}
 }
 
 func TestRegistryAdvertisesBothTools(t *testing.T) {
-	reg := newRegistry(t)
+	reg := newStructuralRegistry()
 	defs := reg.Definitions()
 	if len(defs) != 2 {
 		t.Fatalf("want 2 tool defs, got %d", len(defs))
@@ -124,67 +132,150 @@ func TestRegistryAdvertisesBothTools(t *testing.T) {
 	}
 }
 
+// proposeResult mirrors the result envelope so tests can decode it.
 type proposeResult struct {
-	Status    string          `json:"status"`
-	Missing   []string        `json:"missing"`
-	Error     string          `json:"error"`
-	Programme json.RawMessage `json:"programme"`
+	Status    string           `json:"status"`
+	Missing   []string         `json:"missing"`
+	Errors    []string         `json:"errors"`
+	Programme *outputProgramme `json:"programme"`
 }
 
-// validProgramme builds a programme payload using only seeded fixture ids.
+type outputProgramme struct {
+	Name  string       `json:"name"`
+	Weeks []outputWeek `json:"weeks"`
+}
+
+type outputWeek struct {
+	Week int         `json:"week"`
+	Days []outputDay `json:"days"`
+}
+
+type outputDay struct {
+	Day       string           `json:"day"`
+	Exercises []outputExercise `json:"exercises"`
+}
+
+type outputExercise struct {
+	ExerciseID   string `json:"exercise_id"`
+	Name         string `json:"name"`
+	Order        int    `json:"order"`
+	Sets         int    `json:"sets"`
+	Reps         string `json:"reps"`
+	WarmupSets   string `json:"warmupSets"`
+	RPE          string `json:"rpe"`
+	Rest         string `json:"rest"`
+	Notes        string `json:"notes"`
+	Sub1         string `json:"sub1"`
+	Sub2         string `json:"sub2"`
+	VideoURL     string `json:"videoUrl"`
+	Sub1VideoURL string `json:"sub1VideoUrl"`
+	Sub2VideoURL string `json:"sub2VideoUrl"`
+}
+
+// validProgrammeJSON builds a programme that uses only seeded fixture ids and
+// passes every structural rule.
 func validProgrammeJSON() string {
+	pushDay := `{"day":"Push","exercises":[
+        {"exercise_id":"Barbell_Curl","name":"Anything","sets":3,"reps":"8-10","rpe":"7-8","rest":"~2 min"},
+        {"exercise_id":"Squat","name":"Whatever","sets":4,"reps":"5","rpe":"7-8"}
+    ]}`
+	pullDay := `{"day":"Pull","exercises":[
+        {"exercise_id":"Hammer_Curl","name":"Anything","sets":3,"reps":"10-12"}
+    ]}`
+	dayList := pushDay + "," + pullDay
 	return `{
-        "name": "Coach: test",
-        "weeks": [
-          {"week_number": 1, "days": [
-            {"day_name": "A", "exercises": [
-              {"exercise_id": "Barbell_Curl", "exercise_name": "Barbell Curl", "sets": 3, "reps": "8-10"},
-              {"exercise_id": "Squat",        "exercise_name": "Squat",        "sets": 4, "reps": "5"}
-            ]}
-          ]}
+        "name":"Coach: test",
+        "blocks":[
+          {"block_number":1,"weeks":[1,2,3,4],"days":[` + dayList + `]},
+          {"block_number":2,"weeks":[5,6,7,8],"days":[` + dayList + `]},
+          {"block_number":3,"weeks":[9,10,11,12],"days":[` + dayList + `]}
         ]
       }`
 }
 
-func TestProposeProgrammeAllValidReturnsOK(t *testing.T) {
-	reg := newRegistry(t)
+func decodeResult(t *testing.T, out string) proposeResult {
+	t.Helper()
+	var got proposeResult
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode: %v: %s", err, out)
+	}
+	return got
+}
+
+// --- "ok" + catalog-resolution tests (need DB) ---
+
+func TestProposeProgrammeValidExpandsTo12Weeks(t *testing.T) {
+	reg := newCatalogRegistry(t)
 	out, err := reg.Execute(context.Background(), "propose_programme", validProgrammeJSON())
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	var got proposeResult
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("decode: %v: %s", err, out)
-	}
+	got := decodeResult(t, out)
 	if got.Status != "ok" {
-		t.Errorf("status: want ok, got %q (missing=%v, err=%q)", got.Status, got.Missing, got.Error)
+		t.Fatalf("status: want ok, got %q (errors=%v missing=%v)", got.Status, got.Errors, got.Missing)
 	}
-	if len(got.Programme) == 0 {
-		t.Errorf("expected echoed programme, got empty")
+	if got.Programme == nil {
+		t.Fatalf("expected programme, got nil")
+	}
+	if len(got.Programme.Weeks) != 12 {
+		t.Fatalf("want 12 weeks, got %d", len(got.Programme.Weeks))
+	}
+	for i, w := range got.Programme.Weeks {
+		if w.Week != i+1 {
+			t.Errorf("week[%d].week: want %d, got %d", i, i+1, w.Week)
+		}
+		if len(w.Days) != 2 {
+			t.Errorf("week %d days: want 2, got %d", w.Week, len(w.Days))
+		}
+	}
+	first := got.Programme.Weeks[0].Days[0].Exercises[0]
+	if first.Name != "Barbell Curl" {
+		t.Errorf("week 1 day 1 ex 1: want catalog name 'Barbell Curl', got %q", first.Name)
 	}
 }
 
-func TestProposeProgrammeOneUnknownIDReturnsInvalid(t *testing.T) {
-	reg := newRegistry(t)
-	payload := `{
-        "name": "Coach: bad",
-        "weeks": [
-          {"week_number": 1, "days": [
-            {"day_name": "A", "exercises": [
-              {"exercise_id": "Barbell_Curl", "exercise_name": "Barbell Curl", "sets": 3, "reps": "8"},
-              {"exercise_id": "ghost_lift",   "exercise_name": "Ghost Lift",   "sets": 3, "reps": "8"}
-            ]}
-          ]}
-        ]
-      }`
+func TestProposeProgrammeBlockExpansionPreservesDaysWithinBlock(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	out, err := reg.Execute(context.Background(), "propose_programme", validProgrammeJSON())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "ok" {
+		t.Fatalf("status: want ok, got %q (%v)", got.Status, got.Errors)
+	}
+	w1 := got.Programme.Weeks[0].Days
+	for i := 1; i < 4; i++ {
+		if !daysEqual(w1, got.Programme.Weeks[i].Days) {
+			t.Errorf("week %d days differ from week 1", i+1)
+		}
+	}
+	w5 := got.Programme.Weeks[4].Days
+	for i := 5; i < 8; i++ {
+		if !daysEqual(w5, got.Programme.Weeks[i].Days) {
+			t.Errorf("week %d days differ from week 5", i+1)
+		}
+	}
+	w9 := got.Programme.Weeks[8].Days
+	for i := 9; i < 12; i++ {
+		if !daysEqual(w9, got.Programme.Weeks[i].Days) {
+			t.Errorf("week %d days differ from week 9", i+1)
+		}
+	}
+}
+
+func TestProposeProgrammeUnknownExerciseID(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	dayJSON := `{"day":"Push","exercises":[
+        {"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"},
+        {"exercise_id":"ghost_lift","name":"Ghost","sets":3,"reps":"8"}
+    ]}`
+	payload := allBlocksWithDay(dayJSON)
 	out, err := reg.Execute(context.Background(), "propose_programme", payload)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	var got proposeResult
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("decode: %v: %s", err, out)
-	}
+	got := decodeResult(t, out)
 	if got.Status != "invalid" {
 		t.Fatalf("status: want invalid, got %q", got.Status)
 	}
@@ -194,30 +285,31 @@ func TestProposeProgrammeOneUnknownIDReturnsInvalid(t *testing.T) {
 }
 
 func TestProposeProgrammeMultipleUnknownIDs(t *testing.T) {
-	reg := newRegistry(t)
-	payload := `{
-        "name": "Coach: mostly_bad",
-        "weeks": [
-          {"week_number": 1, "days": [
-            {"day_name": "A", "exercises": [
-              {"exercise_id": "Barbell_Curl", "exercise_name": "Barbell Curl", "sets": 3, "reps": "8"},
-              {"exercise_id": "made_up_1",    "exercise_name": "X",            "sets": 3, "reps": "8"}
-            ]},
-            {"day_name": "B", "exercises": [
-              {"exercise_id": "Squat",     "exercise_name": "Squat", "sets": 3, "reps": "8"},
-              {"exercise_id": "made_up_2", "exercise_name": "Y",     "sets": 3, "reps": "8"}
-            ]}
+	reg := newCatalogRegistry(t)
+	payload := `{"name":"x","blocks":[
+        {"block_number":1,"weeks":[1,2,3,4],"days":[
+          {"day":"Push","exercises":[
+            {"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"},
+            {"exercise_id":"made_up_1","name":"Y","sets":3,"reps":"8"}
           ]}
-        ]
-      }`
+        ]},
+        {"block_number":2,"weeks":[5,6,7,8],"days":[
+          {"day":"Push","exercises":[
+            {"exercise_id":"Squat","name":"x","sets":3,"reps":"8"},
+            {"exercise_id":"made_up_2","name":"Z","sets":3,"reps":"8"}
+          ]}
+        ]},
+        {"block_number":3,"weeks":[9,10,11,12],"days":[
+          {"day":"Push","exercises":[
+            {"exercise_id":"Hammer_Curl","name":"x","sets":3,"reps":"8"}
+          ]}
+        ]}
+    ]}`
 	out, err := reg.Execute(context.Background(), "propose_programme", payload)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	var got proposeResult
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("decode: %v: %s", err, out)
-	}
+	got := decodeResult(t, out)
 	if got.Status != "invalid" {
 		t.Fatalf("status: want invalid, got %q", got.Status)
 	}
@@ -230,12 +322,163 @@ func TestProposeProgrammeMultipleUnknownIDs(t *testing.T) {
 	}
 }
 
-func TestProposeProgrammeEmptyReturnsInvalid(t *testing.T) {
-	reg := newRegistry(t)
+func TestProposeProgrammeOrderFilledFromPosition(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	dayJSON := `{"day":"Push","exercises":[
+        {"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"},
+        {"exercise_id":"Hammer_Curl","name":"y","sets":3,"reps":"8"},
+        {"exercise_id":"Squat","name":"z","sets":3,"reps":"8"}
+    ]}`
+	out, err := reg.Execute(context.Background(), "propose_programme", allBlocksWithDay(dayJSON))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "ok" {
+		t.Fatalf("status: want ok, got %q (%v)", got.Status, got.Errors)
+	}
+	exs := got.Programme.Weeks[0].Days[0].Exercises
+	for i, e := range exs {
+		if e.Order != i+1 {
+			t.Errorf("ex[%d].order: want %d, got %d", i, i+1, e.Order)
+		}
+	}
+}
+
+func TestProposeProgrammeDefaultEmptyStringsPresent(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	out, err := reg.Execute(context.Background(), "propose_programme", validProgrammeJSON())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	body, err := json.Marshal(decodeResult(t, out).Programme.Weeks[0].Days[0].Exercises[1])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, want := range []string{
+		`"warmupSets"`, `"rpe"`, `"rest"`, `"notes"`,
+		`"sub1"`, `"sub2"`, `"videoUrl"`, `"sub1VideoUrl"`, `"sub2VideoUrl"`,
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("encoded exercise missing key %s in %s", want, body)
+		}
+	}
+}
+
+func TestProposeProgrammeCatalogNameOverwritesLLMName(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	dayJSON := `{"day":"Push","exercises":[
+        {"exercise_id":"Barbell_Curl","name":"Bench Press (the LLM is wrong)","sets":3,"reps":"8"}
+    ]}`
+	out, err := reg.Execute(context.Background(), "propose_programme", allBlocksWithDay(dayJSON))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "ok" {
+		t.Fatalf("status: want ok, got %q (%v)", got.Status, got.Errors)
+	}
+	for wi, w := range got.Programme.Weeks {
+		for di, d := range w.Days {
+			for ei, e := range d.Exercises {
+				if e.Name != "Barbell Curl" {
+					t.Errorf("week %d day %d ex %d: want catalog name 'Barbell Curl', got %q", wi+1, di+1, ei+1, e.Name)
+				}
+			}
+		}
+	}
+}
+
+// --- structural tests (short-circuit before DB, no Postgres needed) ---
+
+func TestProposeProgrammeWrongBlockCount(t *testing.T) {
+	reg := newStructuralRegistry()
+	payload := `{"name":"x","blocks":[
+        {"block_number":1,"weeks":[1,2,3,4],"days":[{"day":"Push","exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}]},
+        {"block_number":2,"weeks":[5,6,7,8],"days":[{"day":"Push","exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}]}
+    ]}`
+	out, err := reg.Execute(context.Background(), "propose_programme", payload)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "invalid" {
+		t.Fatalf("status: want invalid, got %q", got.Status)
+	}
+	if !containsSubstr(got.Errors, "3 entries") {
+		t.Errorf("expected error mentioning '3 entries', got %v", got.Errors)
+	}
+}
+
+func TestProposeProgrammeWeekGap(t *testing.T) {
+	reg := newStructuralRegistry()
+	dayJSON := `{"day":"Push","exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}`
+	payload := `{"name":"x","blocks":[
+        {"block_number":1,"weeks":[1,2,3,4],"days":[` + dayJSON + `]},
+        {"block_number":2,"weeks":[5,6,7,8],"days":[` + dayJSON + `]},
+        {"block_number":3,"weeks":[9,10,11,13],"days":[` + dayJSON + `]}
+    ]}`
+	out, err := reg.Execute(context.Background(), "propose_programme", payload)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "invalid" {
+		t.Fatalf("status: want invalid, got %q", got.Status)
+	}
+	if !containsSubstr(got.Errors, "weeks 1-12") {
+		t.Errorf("expected weeks-coverage error, got %v", got.Errors)
+	}
+}
+
+func TestProposeProgrammeDuplicateWeeks(t *testing.T) {
+	reg := newStructuralRegistry()
+	dayJSON := `{"day":"Push","exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}`
+	payload := `{"name":"x","blocks":[
+        {"block_number":1,"weeks":[1,2,3,4],"days":[` + dayJSON + `]},
+        {"block_number":2,"weeks":[4,5,6,7],"days":[` + dayJSON + `]},
+        {"block_number":3,"weeks":[9,10,11,12],"days":[` + dayJSON + `]}
+    ]}`
+	out, err := reg.Execute(context.Background(), "propose_programme", payload)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "invalid" {
+		t.Fatalf("status: want invalid, got %q", got.Status)
+	}
+	if !containsSubstr(got.Errors, "duplicated") {
+		t.Errorf("expected duplicate-weeks error, got %v", got.Errors)
+	}
+}
+
+func TestProposeProgrammeGenericDayLabelRejected(t *testing.T) {
+	cases := []string{"Day 1", "day 2", "DAY 3", "Workout 1", "Session 3", " Day 4 "}
+	reg := newStructuralRegistry()
+	for _, label := range cases {
+		t.Run(label, func(t *testing.T) {
+			dayJSON := `{"day":` + jsonQuote(label) + `,"exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}`
+			out, err := reg.Execute(context.Background(), "propose_programme", allBlocksWithDay(dayJSON))
+			if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			got := decodeResult(t, out)
+			if got.Status != "invalid" {
+				t.Fatalf("label %q: want invalid, got %q", label, got.Status)
+			}
+			if !containsSubstr(got.Errors, "generic") {
+				t.Errorf("label %q: expected 'generic' in errors, got %v", label, got.Errors)
+			}
+		})
+	}
+}
+
+func TestProposeProgrammeEmptyDaysOrExercises(t *testing.T) {
+	reg := newStructuralRegistry()
 	cases := map[string]string{
-		"no weeks":     `{"name":"empty","weeks":[]}`,
-		"empty day":    `{"name":"empty","weeks":[{"week_number":1,"days":[{"day_name":"A","exercises":[]}]}]}`,
-		"no days":      `{"name":"empty","weeks":[{"week_number":1,"days":[]}]}`,
+		"empty blocks": `{"name":"x","blocks":[]}`,
+		"no days":      blocksWithEmptyDays(),
+		"empty day":    blocksWithEmptyExercises(),
 		"blank object": `{}`,
 	}
 	for name, payload := range cases {
@@ -244,16 +487,74 @@ func TestProposeProgrammeEmptyReturnsInvalid(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Execute: %v", err)
 			}
-			var got proposeResult
-			if err := json.Unmarshal([]byte(out), &got); err != nil {
-				t.Fatalf("decode: %v: %s", err, out)
-			}
+			got := decodeResult(t, out)
 			if got.Status != "invalid" {
 				t.Errorf("status: want invalid, got %q", got.Status)
 			}
-			if got.Error == "" {
+			if len(got.Errors) == 0 {
 				t.Errorf("expected an error message, got empty")
 			}
 		})
 	}
+}
+
+func TestProposeProgrammeInvalidJSONShape(t *testing.T) {
+	reg := newStructuralRegistry()
+	out, err := reg.Execute(context.Background(), "propose_programme", `{"blocks":"not an array"}`)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "invalid" {
+		t.Fatalf("status: want invalid, got %q", got.Status)
+	}
+	if !containsSubstr(got.Errors, "invalid request shape") {
+		t.Errorf("expected 'invalid request shape', got %v", got.Errors)
+	}
+}
+
+// --- helpers ---
+
+func allBlocksWithDay(dayJSON string) string {
+	return `{"name":"x","blocks":[
+        {"block_number":1,"weeks":[1,2,3,4],"days":[` + dayJSON + `]},
+        {"block_number":2,"weeks":[5,6,7,8],"days":[` + dayJSON + `]},
+        {"block_number":3,"weeks":[9,10,11,12],"days":[` + dayJSON + `]}
+    ]}`
+}
+
+func blocksWithEmptyDays() string {
+	return `{"name":"x","blocks":[
+        {"block_number":1,"weeks":[1,2,3,4],"days":[]},
+        {"block_number":2,"weeks":[5,6,7,8],"days":[]},
+        {"block_number":3,"weeks":[9,10,11,12],"days":[]}
+    ]}`
+}
+
+func blocksWithEmptyExercises() string {
+	dayJSON := `{"day":"Push","exercises":[]}`
+	return allBlocksWithDay(dayJSON)
+}
+
+func jsonQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func containsSubstr(errs []string, needle string) bool {
+	for _, e := range errs {
+		if strings.Contains(e, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func daysEqual(a, b []outputDay) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	ab, _ := json.Marshal(a)
+	bb, _ := json.Marshal(b)
+	return string(ab) == string(bb)
 }

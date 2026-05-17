@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"sort"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -209,54 +211,98 @@ func optText(s string) pgtype.Text {
 	return pgtype.Text{String: s, Valid: true}
 }
 
-// proposeProgrammeArgs mirrors the JSON Schema we advertise on the tool, with
-// json.RawMessage on the leaf programme so we can echo the model's exact
-// payload back unchanged on success.
-type proposeProgrammeArgs struct {
-	Name  string                 `json:"name"`
-	Weeks []proposeProgrammeWeek `json:"weeks"`
+// proposeProgrammeInput mirrors what the LLM emits: top-level name plus three
+// mesocycle blocks. The backend expands the blocks into a 12-week programme
+// before returning the Flutter-importable shape.
+type proposeProgrammeInput struct {
+	Name   string                  `json:"name"`
+	Blocks []proposeProgrammeBlock `json:"blocks"`
 }
 
-type proposeProgrammeWeek struct {
-	WeekNumber int                   `json:"week_number"`
-	Days       []proposeProgrammeDay `json:"days"`
+type proposeProgrammeBlock struct {
+	BlockNumber int                   `json:"block_number"`
+	Weeks       []int                 `json:"weeks"`
+	Days        []proposeProgrammeDay `json:"days"`
 }
 
 type proposeProgrammeDay struct {
-	DayName   string                     `json:"day_name"`
+	Day       string                     `json:"day"`
 	Exercises []proposeProgrammeExercise `json:"exercises"`
 }
 
 type proposeProgrammeExercise struct {
 	ExerciseID   string `json:"exercise_id"`
-	ExerciseName string `json:"exercise_name"`
+	Name         string `json:"name"`
+	Order        int    `json:"order"`
 	Sets         int    `json:"sets"`
 	Reps         string `json:"reps"`
-	RPE          string `json:"rpe,omitempty"`
-	Rest         string `json:"rest,omitempty"`
-	WarmupSets   string `json:"warmup_sets,omitempty"`
-	Notes        string `json:"notes,omitempty"`
-	Sub1         string `json:"sub1,omitempty"`
-	Sub2         string `json:"sub2,omitempty"`
+	WarmupSets   string `json:"warmupSets"`
+	RPE          string `json:"rpe"`
+	Rest         string `json:"rest"`
+	Notes        string `json:"notes"`
+	Sub1         string `json:"sub1"`
+	Sub2         string `json:"sub2"`
+	VideoURL     string `json:"videoUrl"`
+	Sub1VideoURL string `json:"sub1VideoUrl"`
+	Sub2VideoURL string `json:"sub2VideoUrl"`
 }
 
-// proposeProgrammeResult is the stable shape Flutter detects in the message
-// trail. "ok" means every exercise id resolved; "invalid" lists the missing
-// ids so the model can self-correct on the next turn.
+// outputProgramme is the Flutter-importable shape. Every field on every
+// exercise is present (empty string for unset) so the parser sees the same
+// keys whether the LLM populated them or not.
+type outputProgramme struct {
+	Name  string       `json:"name"`
+	Weeks []outputWeek `json:"weeks"`
+}
+
+type outputWeek struct {
+	Week int         `json:"week"`
+	Days []outputDay `json:"days"`
+}
+
+type outputDay struct {
+	Day       string           `json:"day"`
+	Exercises []outputExercise `json:"exercises"`
+}
+
+type outputExercise struct {
+	ExerciseID   string `json:"exercise_id"`
+	Name         string `json:"name"`
+	Order        int    `json:"order"`
+	Sets         int    `json:"sets"`
+	Reps         string `json:"reps"`
+	WarmupSets   string `json:"warmupSets"`
+	RPE          string `json:"rpe"`
+	Rest         string `json:"rest"`
+	Notes        string `json:"notes"`
+	Sub1         string `json:"sub1"`
+	Sub2         string `json:"sub2"`
+	VideoURL     string `json:"videoUrl"`
+	Sub1VideoURL string `json:"sub1VideoUrl"`
+	Sub2VideoURL string `json:"sub2VideoUrl"`
+}
+
+// proposeProgrammeResult is the stable envelope Flutter detects in the
+// message trail. "ok" carries the expanded 12-week programme; "invalid"
+// carries errors and/or a missing list for the model to self-correct on the
+// next turn.
 type proposeProgrammeResult struct {
-	Status    string          `json:"status"`
-	Missing   []string        `json:"missing,omitempty"`
-	Error     string          `json:"error,omitempty"`
-	Programme json.RawMessage `json:"programme,omitempty"`
+	Status    string           `json:"status"`
+	Missing   []string         `json:"missing,omitempty"`
+	Errors    []string         `json:"errors,omitempty"`
+	Programme *outputProgramme `json:"programme,omitempty"`
 }
 
-// proposeProgrammeTool builds the Coach's final-output tool. The handler
-// validates every exercise_id exists in the catalog and echoes the programme
-// back as JSON on success.
+const (
+	programmeWeekCount     = 12
+	programmeBlockCount    = 3
+	programmeWeeksPerBlock = 4
+)
+
 func proposeProgrammeTool(q *db.Queries) (ToolDef, ToolHandler) {
 	def := ToolDef{
 		Name:        "propose_programme",
-		Description: "Submit a complete workout programme. Every exercise must come from search_exercises results. Backend validates exercise ids exist before returning.",
+		Description: "Submit a complete workout programme as 3 mesocycle blocks. Backend validates exercise ids and expands the blocks to a 12-week programme before returning.",
 		Parameters:  proposeProgrammeSchema(),
 	}
 	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -266,48 +312,208 @@ func proposeProgrammeTool(q *db.Queries) (ToolDef, ToolHandler) {
 }
 
 func runProposeProgramme(ctx context.Context, q *db.Queries, raw json.RawMessage) (string, error) {
-	var args proposeProgrammeArgs
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &args); err != nil {
-			return "", fmt.Errorf("parse args: %w", err)
-		}
-	}
-
-	ids := collectExerciseIDs(args)
-	if len(ids) == 0 {
+	in, err := parseProposeProgrammeArgs(raw)
+	if err != nil {
 		return marshalResult(proposeProgrammeResult{
-			Status:  "invalid",
-			Missing: []string{},
-			Error:   "programme has no exercises",
+			Status: "invalid",
+			Errors: []string{"invalid request shape"},
 		})
 	}
 
-	found, err := q.ExerciseExistsByIDs(ctx, ids)
-	if err != nil {
-		return "", fmt.Errorf("exercise exists by ids: %w", err)
+	if errs := validateStructure(in); len(errs) > 0 {
+		return marshalResult(proposeProgrammeResult{Status: "invalid", Errors: errs})
 	}
-	missing := diffIDs(ids, found)
+
+	ids := collectExerciseIDs(in)
+	if len(ids) == 0 {
+		return marshalResult(proposeProgrammeResult{
+			Status: "invalid",
+			Errors: []string{"programme has no exercises"},
+		})
+	}
+
+	missing, names, err := validateCatalog(ctx, q, ids)
+	if err != nil {
+		return "", fmt.Errorf("validate catalog: %w", err)
+	}
 	if len(missing) > 0 {
 		return marshalResult(proposeProgrammeResult{
 			Status:  "invalid",
 			Missing: missing,
-			Error:   "exercises not found in catalog",
+			Errors:  []string{"exercises not found in catalog"},
 		})
 	}
 
-	return marshalResult(proposeProgrammeResult{
-		Status:    "ok",
-		Programme: raw,
-	})
+	programme := buildOutputProgramme(in, names)
+	return marshalResult(proposeProgrammeResult{Status: "ok", Programme: &programme})
+}
+
+func parseProposeProgrammeArgs(raw json.RawMessage) (*proposeProgrammeInput, error) {
+	in := &proposeProgrammeInput{}
+	if len(raw) == 0 {
+		return in, nil
+	}
+	if err := json.Unmarshal(raw, in); err != nil {
+		return nil, err
+	}
+	return in, nil
+}
+
+// validateStructure runs every check that does not require a DB lookup. It
+// returns all violations rather than stopping at the first, so the model can
+// fix the whole shape in one round-trip.
+func validateStructure(in *proposeProgrammeInput) []string {
+	var errs []string
+	if len(in.Blocks) != programmeBlockCount {
+		errs = append(errs, fmt.Sprintf("blocks must have exactly %d entries (got %d)", programmeBlockCount, len(in.Blocks)))
+	}
+
+	weekSeen := map[int]bool{}
+	var dupes []int
+	for i, b := range in.Blocks {
+		if len(b.Weeks) != programmeWeeksPerBlock {
+			errs = append(errs, fmt.Sprintf("block %d must list exactly %d week numbers (got %d)", i+1, programmeWeeksPerBlock, len(b.Weeks)))
+		}
+		for _, w := range b.Weeks {
+			if weekSeen[w] {
+				dupes = append(dupes, w)
+				continue
+			}
+			weekSeen[w] = true
+		}
+		if len(b.Days) == 0 {
+			errs = append(errs, fmt.Sprintf("block %d must have at least one day", i+1))
+		}
+		for di, d := range b.Days {
+			if isGenericDayLabel(d.Day) {
+				errs = append(errs, fmt.Sprintf("day name %q is generic; use a meaningful label like Push/Pull/Legs/Upper/Lower", d.Day))
+			}
+			if len(d.Exercises) == 0 {
+				errs = append(errs, fmt.Sprintf("block %d day %d (%q) must have at least one exercise", i+1, di+1, d.Day))
+			}
+			for ei, e := range d.Exercises {
+				if e.ExerciseID == "" {
+					errs = append(errs, fmt.Sprintf("block %d day %d exercise %d: exercise_id is required", i+1, di+1, ei+1))
+				}
+				if e.Name == "" {
+					errs = append(errs, fmt.Sprintf("block %d day %d exercise %d: name is required", i+1, di+1, ei+1))
+				}
+				if e.Sets < 1 {
+					errs = append(errs, fmt.Sprintf("block %d day %d exercise %d: sets must be >= 1", i+1, di+1, ei+1))
+				}
+				if e.Reps == "" {
+					errs = append(errs, fmt.Sprintf("block %d day %d exercise %d: reps is required", i+1, di+1, ei+1))
+				}
+			}
+		}
+	}
+	if len(dupes) > 0 {
+		errs = append(errs, fmt.Sprintf("weeks duplicated across blocks: %v", dupes))
+	}
+	if len(in.Blocks) == programmeBlockCount {
+		var missing []int
+		for w := 1; w <= programmeWeekCount; w++ {
+			if !weekSeen[w] {
+				missing = append(missing, w)
+			}
+		}
+		if len(missing) > 0 {
+			errs = append(errs, fmt.Sprintf("blocks must cover weeks 1-%d exactly; missing %v", programmeWeekCount, missing))
+		}
+	}
+	return errs
+}
+
+// genericDayLabel matches "Day 1", "workout 2", "SESSION 3" — anything that
+// reads as a placeholder rather than a real split label. Trailing/leading
+// whitespace is tolerated.
+var genericDayLabel = regexp.MustCompile(`(?i)^\s*(day|workout|session)\s*\d+\s*$`)
+
+func isGenericDayLabel(s string) bool {
+	return genericDayLabel.MatchString(s)
+}
+
+// validateCatalog returns the unknown ids and a name lookup for the known
+// ones in a single round-trip + N point lookups. N is small (distinct
+// exercises in a programme, usually 5-15), so per-row queries are fine.
+func validateCatalog(ctx context.Context, q *db.Queries, ids []string) (missing []string, names map[string]string, err error) {
+	found, err := q.ExerciseExistsByIDs(ctx, ids)
+	if err != nil {
+		return nil, nil, fmt.Errorf("exercise exists by ids: %w", err)
+	}
+	missing = diffIDs(ids, found)
+	if len(missing) > 0 {
+		return missing, nil, nil
+	}
+	names = make(map[string]string, len(found))
+	for _, id := range found {
+		row, err := q.GetExerciseByID(ctx, id)
+		if err != nil {
+			return nil, nil, fmt.Errorf("get exercise %s: %w", id, err)
+		}
+		names[id] = row.Name
+	}
+	return nil, names, nil
+}
+
+// buildOutputProgramme normalizes every exercise (catalog name + filled
+// defaults) and expands the 3-block input into the 12-week wire shape.
+func buildOutputProgramme(in *proposeProgrammeInput, names map[string]string) outputProgramme {
+	blocksByWeek := make(map[int][]outputDay, programmeWeekCount)
+	for _, b := range in.Blocks {
+		days := make([]outputDay, 0, len(b.Days))
+		for _, d := range b.Days {
+			exs := make([]outputExercise, 0, len(d.Exercises))
+			for i, e := range d.Exercises {
+				exs = append(exs, normalizeExercise(e, names[e.ExerciseID], i+1))
+			}
+			days = append(days, outputDay{Day: d.Day, Exercises: exs})
+		}
+		for _, w := range b.Weeks {
+			blocksByWeek[w] = days
+		}
+	}
+
+	weeks := make([]outputWeek, 0, programmeWeekCount)
+	for w := 1; w <= programmeWeekCount; w++ {
+		weeks = append(weeks, outputWeek{Week: w, Days: blocksByWeek[w]})
+	}
+	return outputProgramme{Name: in.Name, Weeks: weeks}
+}
+
+// normalizeExercise overwrites the model's display name with the catalog
+// name, fills the order if missing, and leaves all other defaults at the
+// empty string (Go zero-value) so the JSON encoder always emits the key.
+func normalizeExercise(in proposeProgrammeExercise, catalogName string, position int) outputExercise {
+	order := in.Order
+	if order <= 0 {
+		order = position
+	}
+	return outputExercise{
+		ExerciseID:   in.ExerciseID,
+		Name:         catalogName,
+		Order:        order,
+		Sets:         in.Sets,
+		Reps:         in.Reps,
+		WarmupSets:   in.WarmupSets,
+		RPE:          in.RPE,
+		Rest:         in.Rest,
+		Notes:        in.Notes,
+		Sub1:         in.Sub1,
+		Sub2:         in.Sub2,
+		VideoURL:     in.VideoURL,
+		Sub1VideoURL: in.Sub1VideoURL,
+		Sub2VideoURL: in.Sub2VideoURL,
+	}
 }
 
 // collectExerciseIDs walks the programme and returns every distinct
 // exercise_id in the order they first appear, skipping blanks.
-func collectExerciseIDs(p proposeProgrammeArgs) []string {
+func collectExerciseIDs(p *proposeProgrammeInput) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0)
-	for _, w := range p.Weeks {
-		for _, d := range w.Days {
+	for _, b := range p.Blocks {
+		for _, d := range b.Days {
 			for _, e := range d.Exercises {
 				if e.ExerciseID == "" || seen[e.ExerciseID] {
 					continue
@@ -320,6 +526,8 @@ func collectExerciseIDs(p proposeProgrammeArgs) []string {
 	return out
 }
 
+// diffIDs returns the ids in want that are not in have, preserving the
+// original order so the model sees its emissions back in the same sequence.
 func diffIDs(want, have []string) []string {
 	got := make(map[string]bool, len(have))
 	for _, id := range have {
@@ -331,41 +539,56 @@ func diffIDs(want, have []string) []string {
 			missing = append(missing, id)
 		}
 	}
+	sort.Strings(missing)
 	return missing
 }
 
 func proposeProgrammeSchema() map[string]any {
 	exerciseProps := map[string]any{
-		"exercise_id":   map[string]any{"type": "string"},
-		"exercise_name": map[string]any{"type": "string"},
-		"sets":          map[string]any{"type": "integer", "minimum": 1},
-		"reps":          map[string]any{"type": "string"},
-		"rpe":           map[string]any{"type": "string"},
-		"rest":          map[string]any{"type": "string"},
-		"warmup_sets":   map[string]any{"type": "string"},
-		"notes":         map[string]any{"type": "string"},
-		"sub1":          map[string]any{"type": "string"},
-		"sub2":          map[string]any{"type": "string"},
+		"exercise_id":  map[string]any{"type": "string", "description": "Catalog id from search_exercises results"},
+		"name":         map[string]any{"type": "string", "description": "Display name; backend overwrites this with the catalog name"},
+		"sets":         map[string]any{"type": "integer", "minimum": 1},
+		"reps":         map[string]any{"type": "string"},
+		"warmupSets":   map[string]any{"type": "string"},
+		"rpe":          map[string]any{"type": "string"},
+		"rest":         map[string]any{"type": "string"},
+		"notes":        map[string]any{"type": "string"},
+		"sub1":         map[string]any{"type": "string"},
+		"sub2":         map[string]any{"type": "string"},
+		"videoUrl":     map[string]any{"type": "string"},
+		"sub1VideoUrl": map[string]any{"type": "string"},
+		"sub2VideoUrl": map[string]any{"type": "string"},
+		"order":        map[string]any{"type": "integer", "minimum": 1, "description": "Auto-filled from position if omitted"},
 	}
 	dayProps := map[string]any{
-		"day_name": map[string]any{"type": "string"},
+		"day": map[string]any{
+			"type":        "string",
+			"description": "Meaningful split label (Push/Pull/Legs, Upper/Lower, Full Body A, etc.). Never \"Day 1\".",
+		},
 		"exercises": map[string]any{
 			"type": "array",
 			"items": map[string]any{
 				"type":       "object",
 				"properties": exerciseProps,
-				"required":   []string{"exercise_id", "exercise_name", "sets", "reps"},
+				"required":   []string{"exercise_id", "name", "sets", "reps"},
 			},
 		},
 	}
-	weekProps := map[string]any{
-		"week_number": map[string]any{"type": "integer", "minimum": 1},
+	blockProps := map[string]any{
+		"block_number": map[string]any{"type": "integer", "minimum": 1, "maximum": programmeBlockCount},
+		"weeks": map[string]any{
+			"type":        "array",
+			"description": "The 4 week numbers this block covers, e.g. [1,2,3,4]",
+			"items":       map[string]any{"type": "integer", "minimum": 1, "maximum": programmeWeekCount},
+			"minItems":    programmeWeeksPerBlock,
+			"maxItems":    programmeWeeksPerBlock,
+		},
 		"days": map[string]any{
 			"type": "array",
 			"items": map[string]any{
 				"type":       "object",
 				"properties": dayProps,
-				"required":   []string{"day_name", "exercises"},
+				"required":   []string{"day", "exercises"},
 			},
 		},
 	}
@@ -376,15 +599,18 @@ func proposeProgrammeSchema() map[string]any {
 				"type":        "string",
 				"description": "Programme name, e.g. 'Coach: 4-day PPL'",
 			},
-			"weeks": map[string]any{
-				"type": "array",
+			"blocks": map[string]any{
+				"type":        "array",
+				"description": "Exactly 3 mesocycle blocks covering weeks 1-12 in order.",
+				"minItems":    programmeBlockCount,
+				"maxItems":    programmeBlockCount,
 				"items": map[string]any{
 					"type":       "object",
-					"properties": weekProps,
-					"required":   []string{"week_number", "days"},
+					"properties": blockProps,
+					"required":   []string{"block_number", "weeks", "days"},
 				},
 			},
 		},
-		"required": []string{"name", "weeks"},
+		"required": []string{"name", "blocks"},
 	}
 }

@@ -347,9 +347,15 @@ func TestHandlerCoachModeEndToEndStub(t *testing.T) {
 
 // validProgrammeFixtureJSON mirrors validProgrammeJSON in tools_test.go but
 // lives in the in-package test file so we can stitch it into the coach
-// end-to-end test without crossing packages.
+// end-to-end test without crossing packages. Uses the canonical 3-block /
+// 12-week wire shape.
 func validProgrammeFixtureJSON() string {
-	return `{"name":"Coach: test","weeks":[{"week_number":1,"days":[{"day_name":"A","exercises":[{"exercise_id":"Barbell_Curl","exercise_name":"Barbell Curl","sets":3,"reps":"8-10"}]}]}]}`
+	day := `{"day":"Push","exercises":[{"exercise_id":"Barbell_Curl","name":"Barbell Curl","sets":3,"reps":"8-10"}]}`
+	return `{"name":"Coach: test","blocks":[` +
+		`{"block_number":1,"weeks":[1,2,3,4],"days":[` + day + `]},` +
+		`{"block_number":2,"weeks":[5,6,7,8],"days":[` + day + `]},` +
+		`{"block_number":3,"weeks":[9,10,11,12],"days":[` + day + `]}` +
+		`]}`
 }
 
 // coachToolStubRegistry registers stub handlers for both Coach tools. The
