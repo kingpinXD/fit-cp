@@ -51,6 +51,7 @@ The LLM emits a compact **block** shape. The backend validates and expands it to
 - Union of all weeks across blocks is exactly `[1..12]` (no gaps, no dupes)
 - Same day labels and day count across all 3 blocks. Exercise selection MAY vary between blocks (variants of the same muscle group / movement pattern), but stays constant within a block.
 - Day labels are meaningful (Push/Pull/Legs/Upper/Lower/Chest/Back/Shoulders/Arms/Full Body A/B/C). The validator rejects regex `(?i)^\s*(day|workout|session)\s*\d+\s*$`.
+- Day labels must match the required pattern for the day count (1-3=Full Body variants, 4=FB+PPL, 5=PPL+UL, 6=PPL×2, 7+=permissive). Validator rejects mismatches.
 - Every `exercise_id` exists in the `exercises` catalog.
 
 #### Programme split selection
@@ -63,6 +64,8 @@ The Coach picks the split before selecting exercises, driven by days-per-week. T
 | 4 | Full Body + Push/Pull/Legs |
 | 5 | Push/Pull/Legs + Upper/Lower |
 | 6 | Push/Pull/Legs repeated |
+
+Enforced by the validator. A `propose_programme` call with mismatched day labels for the day count returns `{"status":"invalid","errors":[...]}` with a message naming the actual and expected multiset.
 
 #### Injury handling
 
@@ -217,19 +220,22 @@ The Flutter parser already handles every key in the output. No parser changes re
 3. Same-day-structure validation (validateSameDayStructure)
    - all 3 blocks have the same day count
    - day labels match block 1 in the same order
-4. Catalog membership (batch: ExerciseExistsByIDs)
-5. Normalization
+4. Split-table enforcement (validateSplitForDayCount)
+   - block 1's day-label multiset must match the days-per-week template
+     (1-3=Full Body variants, 4=FB+PPL, 5=PPL+UL, 6=PPL×2, 7+=permissive)
+5. Catalog membership (batch: ExerciseExistsByIDs)
+6. Normalization
    - name ← catalog row's name
    - empty strings fill optional fields
    - order ← array position if zero
-6. Expansion
+7. Expansion
    - for each block, for each week in block.weeks:
        emit {week: N, days: <deep-copy of block.days>}
    - sort by week ascending
-7. Return {status:"ok", programme:{name, weeks:[12]}}
+8. Return {status:"ok", programme:{name, weeks:[12]}}
 ```
 
-Steps 2-4 short-circuit on failure. Step 6 cannot fail once 2-4 pass.
+Steps 2-5 short-circuit on failure. Step 7 cannot fail once 2-5 pass.
 
 ## Token cost (for reference)
 

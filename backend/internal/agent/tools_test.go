@@ -173,16 +173,16 @@ type outputExercise struct {
 }
 
 // validProgrammeJSON builds a programme that uses only seeded fixture ids and
-// passes every structural rule.
+// passes every structural rule (2 days/week = Full Body A + Full Body B).
 func validProgrammeJSON() string {
-	pushDay := `{"day":"Push","exercises":[
+	dayA := `{"day":"Full Body A","exercises":[
         {"exercise_id":"Barbell_Curl","name":"Anything","sets":3,"reps":"8-10","rpe":"7-8","rest":"~2 min"},
         {"exercise_id":"Squat","name":"Whatever","sets":4,"reps":"5","rpe":"7-8"}
     ]}`
-	pullDay := `{"day":"Pull","exercises":[
+	dayB := `{"day":"Full Body B","exercises":[
         {"exercise_id":"Hammer_Curl","name":"Anything","sets":3,"reps":"10-12"}
     ]}`
-	dayList := pushDay + "," + pullDay
+	dayList := dayA + "," + dayB
 	return `{
         "name":"Coach: test",
         "blocks":[
@@ -266,7 +266,7 @@ func TestProposeProgrammeBlockExpansionPreservesDaysWithinBlock(t *testing.T) {
 
 func TestProposeProgrammeUnknownExerciseID(t *testing.T) {
 	reg := newCatalogRegistry(t)
-	dayJSON := `{"day":"Push","exercises":[
+	dayJSON := `{"day":"Full Body","exercises":[
         {"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"},
         {"exercise_id":"ghost_lift","name":"Ghost","sets":3,"reps":"8"}
     ]}`
@@ -288,19 +288,19 @@ func TestProposeProgrammeMultipleUnknownIDs(t *testing.T) {
 	reg := newCatalogRegistry(t)
 	payload := `{"name":"x","blocks":[
         {"block_number":1,"weeks":[1,2,3,4],"days":[
-          {"day":"Push","exercises":[
+          {"day":"Full Body","exercises":[
             {"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"},
             {"exercise_id":"made_up_1","name":"Y","sets":3,"reps":"8"}
           ]}
         ]},
         {"block_number":2,"weeks":[5,6,7,8],"days":[
-          {"day":"Push","exercises":[
+          {"day":"Full Body","exercises":[
             {"exercise_id":"Squat","name":"x","sets":3,"reps":"8"},
             {"exercise_id":"made_up_2","name":"Z","sets":3,"reps":"8"}
           ]}
         ]},
         {"block_number":3,"weeks":[9,10,11,12],"days":[
-          {"day":"Push","exercises":[
+          {"day":"Full Body","exercises":[
             {"exercise_id":"Hammer_Curl","name":"x","sets":3,"reps":"8"}
           ]}
         ]}
@@ -324,7 +324,7 @@ func TestProposeProgrammeMultipleUnknownIDs(t *testing.T) {
 
 func TestProposeProgrammeOrderFilledFromPosition(t *testing.T) {
 	reg := newCatalogRegistry(t)
-	dayJSON := `{"day":"Push","exercises":[
+	dayJSON := `{"day":"Full Body","exercises":[
         {"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"},
         {"exercise_id":"Hammer_Curl","name":"y","sets":3,"reps":"8"},
         {"exercise_id":"Squat","name":"z","sets":3,"reps":"8"}
@@ -367,7 +367,7 @@ func TestProposeProgrammeDefaultEmptyStringsPresent(t *testing.T) {
 
 func TestProposeProgrammeCatalogNameOverwritesLLMName(t *testing.T) {
 	reg := newCatalogRegistry(t)
-	dayJSON := `{"day":"Push","exercises":[
+	dayJSON := `{"day":"Full Body","exercises":[
         {"exercise_id":"Barbell_Curl","name":"Bench Press (the LLM is wrong)","sets":3,"reps":"8"}
     ]}`
 	out, err := reg.Execute(context.Background(), "propose_programme", allBlocksWithDay(dayJSON))
@@ -553,13 +553,13 @@ func TestProposeProgrammeSameDaysDifferentExercisesPerBlock(t *testing.T) {
 	reg := newCatalogRegistry(t)
 	payload := `{"name":"x","blocks":[
         {"block_number":1,"weeks":[1,2,3,4],"days":[
-          {"day":"Push","exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}
+          {"day":"Full Body","exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}
         ]},
         {"block_number":2,"weeks":[5,6,7,8],"days":[
-          {"day":"Push","exercises":[{"exercise_id":"Hammer_Curl","name":"x","sets":3,"reps":"8"}]}
+          {"day":"Full Body","exercises":[{"exercise_id":"Hammer_Curl","name":"x","sets":3,"reps":"8"}]}
         ]},
         {"block_number":3,"weeks":[9,10,11,12],"days":[
-          {"day":"Push","exercises":[{"exercise_id":"Squat","name":"x","sets":3,"reps":"8"}]}
+          {"day":"Full Body","exercises":[{"exercise_id":"Squat","name":"x","sets":3,"reps":"8"}]}
         ]}
     ]}`
 	out, err := reg.Execute(context.Background(), "propose_programme", payload)
@@ -605,6 +605,207 @@ func TestProposeProgrammeInvalidJSONShape(t *testing.T) {
 	}
 	if !containsSubstr(got.Errors, "invalid request shape") {
 		t.Errorf("expected 'invalid request shape', got %v", got.Errors)
+	}
+}
+
+// --- day-label split table enforcement (structural, no DB needed) ---
+
+// blocksWithDayList builds a 3-block payload where every block has the same
+// day list (each day uses Barbell_Curl as a single exercise so we always
+// pass the "at least one exercise" rule). Order of labels in the slice is
+// preserved across all 3 blocks so validateSameDayStructure stays happy.
+func blocksWithDayList(labels []string) string {
+	day := func(label string) string {
+		return `{"day":` + jsonQuote(label) + `,"exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}`
+	}
+	days := make([]string, 0, len(labels))
+	for _, l := range labels {
+		days = append(days, day(l))
+	}
+	dayList := strings.Join(days, ",")
+	return `{"name":"x","blocks":[
+        {"block_number":1,"weeks":[1,2,3,4],"days":[` + dayList + `]},
+        {"block_number":2,"weeks":[5,6,7,8],"days":[` + dayList + `]},
+        {"block_number":3,"weeks":[9,10,11,12],"days":[` + dayList + `]}
+    ]}`
+}
+
+// hasSplitError returns true when at least one error mentions the split-table
+// failure. Used by the "reject" cases below.
+func hasSplitError(errs []string) bool {
+	return containsSubstr(errs, "do not match the required split")
+}
+
+func TestSplit4DayFullBodyPlusPPLAccepted(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	out, err := reg.Execute(context.Background(), "propose_programme",
+		blocksWithDayList([]string{"Full Body", "Push", "Pull", "Legs"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "ok" {
+		t.Fatalf("status: want ok, got %q (errors=%v missing=%v)", got.Status, got.Errors, got.Missing)
+	}
+}
+
+func TestSplit4DayAllFullBodyRejected(t *testing.T) {
+	reg := newStructuralRegistry()
+	out, err := reg.Execute(context.Background(), "propose_programme",
+		blocksWithDayList([]string{"Full Body", "Full Body", "Full Body", "Full Body"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "invalid" {
+		t.Fatalf("status: want invalid, got %q", got.Status)
+	}
+	if !containsSubstr(got.Errors, "do not match the required split for 4 days/week") {
+		t.Errorf("expected 'do not match the required split for 4 days/week' error, got %v", got.Errors)
+	}
+}
+
+func TestSplit4DayUpperLowerRejected(t *testing.T) {
+	reg := newStructuralRegistry()
+	out, err := reg.Execute(context.Background(), "propose_programme",
+		blocksWithDayList([]string{"Upper", "Lower", "Upper", "Lower"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "invalid" {
+		t.Fatalf("status: want invalid, got %q", got.Status)
+	}
+	if !hasSplitError(got.Errors) {
+		t.Errorf("expected split-mismatch error, got %v", got.Errors)
+	}
+}
+
+func TestSplit5DayPPLPlusULAccepted(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	out, err := reg.Execute(context.Background(), "propose_programme",
+		blocksWithDayList([]string{"Push", "Pull", "Legs", "Upper", "Lower"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "ok" {
+		t.Fatalf("status: want ok, got %q (errors=%v missing=%v)", got.Status, got.Errors, got.Missing)
+	}
+}
+
+func TestSplit5DayPPLRepeatedRejected(t *testing.T) {
+	reg := newStructuralRegistry()
+	out, err := reg.Execute(context.Background(), "propose_programme",
+		blocksWithDayList([]string{"Push", "Pull", "Legs", "Push", "Pull"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "invalid" {
+		t.Fatalf("status: want invalid, got %q", got.Status)
+	}
+	if !hasSplitError(got.Errors) {
+		t.Errorf("expected split-mismatch error, got %v", got.Errors)
+	}
+}
+
+func TestSplit6DayPPLRepeatedAccepted(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	out, err := reg.Execute(context.Background(), "propose_programme",
+		blocksWithDayList([]string{"Push", "Pull", "Legs", "Push", "Pull", "Legs"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "ok" {
+		t.Fatalf("status: want ok, got %q (errors=%v missing=%v)", got.Status, got.Errors, got.Missing)
+	}
+}
+
+func TestSplit6DayULRejected(t *testing.T) {
+	reg := newStructuralRegistry()
+	out, err := reg.Execute(context.Background(), "propose_programme",
+		blocksWithDayList([]string{"Upper", "Lower", "Upper", "Lower", "Upper", "Lower"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "invalid" {
+		t.Fatalf("status: want invalid, got %q", got.Status)
+	}
+	if !hasSplitError(got.Errors) {
+		t.Errorf("expected split-mismatch error, got %v", got.Errors)
+	}
+}
+
+func TestSplit3DayFullBodyVariantsAccepted(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	out, err := reg.Execute(context.Background(), "propose_programme",
+		blocksWithDayList([]string{"Full Body A", "Full Body B", "Full Body C"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "ok" {
+		t.Fatalf("status: want ok, got %q (errors=%v missing=%v)", got.Status, got.Errors, got.Missing)
+	}
+}
+
+func TestSplit3DayMixedRejected(t *testing.T) {
+	reg := newStructuralRegistry()
+	out, err := reg.Execute(context.Background(), "propose_programme",
+		blocksWithDayList([]string{"Full Body A", "Push", "Pull"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "invalid" {
+		t.Fatalf("status: want invalid, got %q", got.Status)
+	}
+	if !hasSplitError(got.Errors) {
+		t.Errorf("expected split-mismatch error, got %v", got.Errors)
+	}
+}
+
+func TestSplit7DayPermissive(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	// 7 labels — any meaningful split (still has to pass the no-generic-label
+	// rule). Validator does not enforce a multiset at 7+.
+	out, err := reg.Execute(context.Background(), "propose_programme",
+		blocksWithDayList([]string{"Push", "Pull", "Legs", "Upper", "Lower", "Chest", "Back"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "ok" {
+		t.Fatalf("status: want ok, got %q (errors=%v missing=%v)", got.Status, got.Errors, got.Missing)
+	}
+}
+
+func TestSplitCaseInsensitive(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	out, err := reg.Execute(context.Background(), "propose_programme",
+		blocksWithDayList([]string{"full body", "PUSH", "Pull", "legs"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "ok" {
+		t.Fatalf("status: want ok, got %q (errors=%v missing=%v)", got.Status, got.Errors, got.Missing)
+	}
+}
+
+func TestSplitOrderIndependent(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	out, err := reg.Execute(context.Background(), "propose_programme",
+		blocksWithDayList([]string{"Push", "Legs", "Full Body", "Pull"}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "ok" {
+		t.Fatalf("status: want ok, got %q (errors=%v missing=%v)", got.Status, got.Errors, got.Missing)
 	}
 }
 

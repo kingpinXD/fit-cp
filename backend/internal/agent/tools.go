@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -322,6 +323,9 @@ func runProposeProgramme(ctx context.Context, q *db.Queries, raw json.RawMessage
 
 	errs := validateStructure(in)
 	errs = append(errs, validateSameDayStructure(in.Blocks)...)
+	if len(in.Blocks) > 0 {
+		errs = append(errs, validateSplitForDayCount(in.Blocks[0].Days)...)
+	}
 	if len(errs) > 0 {
 		return marshalResult(proposeProgrammeResult{Status: "invalid", Errors: errs})
 	}
@@ -458,6 +462,73 @@ func validateSameDayStructure(blocks []proposeProgrammeBlock) []string {
 		}
 	}
 	return errs
+}
+
+// validateSplitForDayCount enforces the day-label pattern per days-per-week.
+// Acts on block 1's days only — validateSameDayStructure already guarantees
+// blocks 2 and 3 mirror block 1.
+func validateSplitForDayCount(days []proposeProgrammeDay) []string {
+	n := len(days)
+	if n >= 7 || n == 0 {
+		return nil
+	}
+	counts := map[string]int{}
+	for _, d := range days {
+		token := normalizeDayLabel(d.Day)
+		counts[token]++
+	}
+	expected, ok := splitTemplates[n]
+	if !ok {
+		return nil
+	}
+	if !mapsEqual(counts, expected) {
+		return []string{splitErrorMessage(n, days, expected)}
+	}
+	return nil
+}
+
+// normalizeDayLabel lowercases + trims, collapsing any "Full Body" variant
+// (`Full Body`, `Full Body A/B/C`) to the single token "full body" so the
+// multiset check is order- and suffix-independent.
+func normalizeDayLabel(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if strings.HasPrefix(s, "full body") {
+		return "full body"
+	}
+	return s
+}
+
+// splitTemplates is the canonical multiset per days/week. Lowercase keys.
+var splitTemplates = map[int]map[string]int{
+	1: {"full body": 1},
+	2: {"full body": 2},
+	3: {"full body": 3},
+	4: {"full body": 1, "push": 1, "pull": 1, "legs": 1},
+	5: {"push": 1, "pull": 1, "legs": 1, "upper": 1, "lower": 1},
+	6: {"push": 2, "pull": 2, "legs": 2},
+}
+
+func mapsEqual(a, b map[string]int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func splitErrorMessage(n int, days []proposeProgrammeDay, expected map[string]int) string {
+	actual := make([]string, 0, len(days))
+	for _, d := range days {
+		actual = append(actual, d.Day)
+	}
+	return fmt.Sprintf(
+		"day labels %v do not match the required split for %d days/week — expected the multiset %v (case-insensitive, Full Body variants count as Full Body)",
+		actual, n, expected,
+	)
 }
 
 // validateCatalog returns the unknown ids and a name lookup for the known
