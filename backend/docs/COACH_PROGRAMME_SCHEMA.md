@@ -49,9 +49,29 @@ The LLM emits a compact **block** shape. The backend validates and expands it to
 - `blocks.length == 3`
 - `blocks[i].weeks.length == 4`
 - Union of all weeks across blocks is exactly `[1..12]` (no gaps, no dupes)
-- Same exercise selection in every block per day (only prescriptions change between blocks)
+- Same day labels and day count across all 3 blocks. Exercise selection MAY vary between blocks (variants of the same muscle group / movement pattern), but stays constant within a block.
 - Day labels are meaningful (Push/Pull/Legs/Upper/Lower/Chest/Back/Shoulders/Arms/Full Body A/B/C). The validator rejects regex `(?i)^\s*(day|workout|session)\s*\d+\s*$`.
 - Every `exercise_id` exists in the `exercises` catalog.
+
+#### Programme split selection
+
+The Coach picks the split before selecting exercises, driven by days-per-week. The day list must be identical across all 3 blocks (count, labels, order).
+
+| Days/week | Day list |
+|---|---|
+| 1-3 | Full Body every day (`Full Body A`, optionally `B`, `C`) |
+| 4 | Full Body + Push/Pull/Legs |
+| 5 | Push/Pull/Legs + Upper/Lower |
+| 6 | Push/Pull/Legs repeated |
+
+#### Injury handling
+
+When the user mentions an injury, pain, or limitation, the Coach:
+
+- Asks which movements aggravate it if not already clear
+- Skips exercises that load the injured area (shoulder → no overhead presses / upright rows; lower back → no deadlifts / RDLs / heavy axial loading; knee → no deep heavy squats, prefer machine variants)
+- Caps RPE at 7 across all 3 blocks (no RPE 8-9 peak)
+- Prefers machine and cable variants over barbell free weights
 
 ### Tool output — the expanded week shape
 
@@ -103,7 +123,7 @@ After validation + normalization + expansion, the handler returns:
 **Invariants the output guarantees:**
 - `weeks.length == 12`, week numbers sorted ascending, exactly `[1..12]`.
 - Within a block: weeks have byte-identical `days` arrays.
-- Across blocks: same exercise ids per day; only prescriptions (`sets`/`reps`/`rpe` etc.) vary.
+- Across blocks: same day labels and day count. Exercise ids per day may vary between blocks; within a block they stay identical across the 4 weeks.
 - Every exercise has all 14 fields present, even if empty string (`sub1`, `videoUrl`, etc.).
 - `name` always equals the catalog's `exercises.name` (LLM-supplied name is overwritten).
 - `order` is 1-based per day, contiguous.
@@ -194,19 +214,22 @@ The Flutter parser already handles every key in the output. No parser changes re
    - days.length >= 1, exercises.length >= 1
    - day labels not generic (regex check)
    - exercise required fields present
-3. Catalog membership (batch: ExerciseExistsByIDs)
-4. Normalization
+3. Same-day-structure validation (validateSameDayStructure)
+   - all 3 blocks have the same day count
+   - day labels match block 1 in the same order
+4. Catalog membership (batch: ExerciseExistsByIDs)
+5. Normalization
    - name ← catalog row's name
    - empty strings fill optional fields
    - order ← array position if zero
-5. Expansion
+6. Expansion
    - for each block, for each week in block.weeks:
        emit {week: N, days: <deep-copy of block.days>}
    - sort by week ascending
-6. Return {status:"ok", programme:{name, weeks:[12]}}
+7. Return {status:"ok", programme:{name, weeks:[12]}}
 ```
 
-Steps 2 and 3 short-circuit on failure. Step 5 cannot fail once 2 and 3 pass.
+Steps 2-4 short-circuit on failure. Step 6 cannot fail once 2-4 pass.
 
 ## Token cost (for reference)
 
