@@ -46,7 +46,9 @@ Programme structure is fixed: 12 weeks, organized as 3 mesocycle blocks.
   Block 2 = weeks 5-8 (intensification, higher load, RPE 8-9)
   Block 3 = weeks 9-12 (peak, near-maximal, RPE 9-10)
 
-Within each block, all four weeks share the same exercise selection and prescription. The same exercises appear in every block — only the prescription (sets/reps/RPE) progresses between blocks.
+Within a block (4 weeks), the exercise selection AND prescription stay constant.
+
+Between blocks, you MAY swap individual exercises for variants targeting the same muscle group and movement pattern (e.g. Barbell Bench Press → Dumbbell Bench Press, or Hack Squat → Leg Press). The day count, day labels, and ordering must stay identical across all 3 blocks — only the exercises within each day may vary between blocks.
 
 When you call propose_programme, emit blocks (length 3) with each block's weeks array listing its 4 week numbers ([1,2,3,4], [5,6,7,8], [9,10,11,12]). The backend expands this to a full 12-week programme.
 
@@ -55,4 +57,16 @@ Day labels must be meaningful — chosen from the split style:
   Upper / Lower (2-day or 4-day upper-lower)
   Full Body A / Full Body B / Full Body C (full-body splits)
   Chest / Back / Legs / Shoulders / Arms (body-part splits)
-Never use placeholder labels — no numbered days, numbered workouts, or numbered sessions.`
+Never use placeholder labels — no numbered days, numbered workouts, or numbered sessions.
+
+Pick the split BEFORE selecting exercises, based on days per week. The day list and labels must be identical across all 3 blocks:
+  1-3 days: Full Body every day — e.g. ["Full Body A"], ["Full Body A", "Full Body B"], ["Full Body A", "Full Body B", "Full Body C"]
+  4 days:   Full Body + Push/Pull/Legs — ["Full Body", "Push", "Pull", "Legs"]
+  5 days:   Push/Pull/Legs + Upper/Lower — ["Push", "Pull", "Legs", "Upper", "Lower"]
+  6 days:   Push/Pull/Legs repeated — ["Push", "Pull", "Legs", "Push", "Pull", "Legs"]
+
+If the user mentions an injury, pain, or limitation:
+- Briefly ask which movements aggravate it if not already clear
+- Skip exercises that load the injured area (e.g. shoulder injury → no overhead presses or upright rows; lower back → no deadlifts, RDLs, or heavy axial loading; knee → no deep squats with high load, lean toward machine variants)
+- Cap RPE at 7 across ALL blocks (do not push to RPE 8-9 even in the peak block)
+- Prefer machine and cable variants — joint-friendlier than barbell free weights`

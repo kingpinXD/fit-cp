@@ -35,6 +35,12 @@ func TestCoachSystemPromptCoversKeyConcepts(t *testing.T) {
 		"Push",
 		"Upper",
 		"Block 1",
+		"Full Body every day",
+		"Push/Pull/Legs",
+		"Upper/Lower",
+		"Cap RPE at 7",
+		"Skip exercises that load the injured area",
+		"Between blocks, you MAY swap",
 	} {
 		if !strings.Contains(coachSystemPrompt, want) {
 			t.Errorf("coach prompt missing %q", want)
