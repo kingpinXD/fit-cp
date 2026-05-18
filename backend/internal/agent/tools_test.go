@@ -498,6 +498,101 @@ func TestProposeProgrammeEmptyDaysOrExercises(t *testing.T) {
 	}
 }
 
+func TestProposeProgrammeMismatchedDayCounts(t *testing.T) {
+	reg := newStructuralRegistry()
+	dayJSON := `{"day":"Push","exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}`
+	pullDayJSON := `{"day":"Pull","exercises":[{"exercise_id":"Hammer_Curl","name":"x","sets":3,"reps":"8"}]}`
+	legsDayJSON := `{"day":"Legs","exercises":[{"exercise_id":"Squat","name":"x","sets":3,"reps":"8"}]}`
+	upperDayJSON := `{"day":"Upper","exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}`
+	payload := `{"name":"x","blocks":[
+        {"block_number":1,"weeks":[1,2,3,4],"days":[` + dayJSON + `,` + pullDayJSON + `,` + legsDayJSON + `,` + upperDayJSON + `]},
+        {"block_number":2,"weeks":[5,6,7,8],"days":[` + dayJSON + `,` + pullDayJSON + `,` + legsDayJSON + `]},
+        {"block_number":3,"weeks":[9,10,11,12],"days":[` + dayJSON + `,` + pullDayJSON + `,` + legsDayJSON + `,` + upperDayJSON + `]}
+    ]}`
+	out, err := reg.Execute(context.Background(), "propose_programme", payload)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "invalid" {
+		t.Fatalf("status: want invalid, got %q", got.Status)
+	}
+	if !containsSubstr(got.Errors, "day count must match") {
+		t.Errorf("expected 'day count must match' error, got %v", got.Errors)
+	}
+}
+
+func TestProposeProgrammeMismatchedDayLabels(t *testing.T) {
+	reg := newStructuralRegistry()
+	pushJSON := `{"day":"Push","exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}`
+	pullJSON := `{"day":"Pull","exercises":[{"exercise_id":"Hammer_Curl","name":"x","sets":3,"reps":"8"}]}`
+	legsJSON := `{"day":"Legs","exercises":[{"exercise_id":"Squat","name":"x","sets":3,"reps":"8"}]}`
+	upperJSON := `{"day":"Upper","exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}`
+	payload := `{"name":"x","blocks":[
+        {"block_number":1,"weeks":[1,2,3,4],"days":[` + pushJSON + `,` + pullJSON + `,` + legsJSON + `,` + upperJSON + `]},
+        {"block_number":2,"weeks":[5,6,7,8],"days":[` + pushJSON + `,` + pullJSON + `,` + upperJSON + `,` + legsJSON + `]},
+        {"block_number":3,"weeks":[9,10,11,12],"days":[` + pushJSON + `,` + pullJSON + `,` + legsJSON + `,` + upperJSON + `]}
+    ]}`
+	out, err := reg.Execute(context.Background(), "propose_programme", payload)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "invalid" {
+		t.Fatalf("status: want invalid, got %q", got.Status)
+	}
+	if !containsSubstr(got.Errors, "block 2 day 3") {
+		t.Errorf("expected 'block 2 day 3' error, got %v", got.Errors)
+	}
+	if !containsSubstr(got.Errors, "day labels must match") {
+		t.Errorf("expected 'day labels must match' error, got %v", got.Errors)
+	}
+}
+
+func TestProposeProgrammeSameDaysDifferentExercisesPerBlock(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	payload := `{"name":"x","blocks":[
+        {"block_number":1,"weeks":[1,2,3,4],"days":[
+          {"day":"Push","exercises":[{"exercise_id":"Barbell_Curl","name":"x","sets":3,"reps":"8"}]}
+        ]},
+        {"block_number":2,"weeks":[5,6,7,8],"days":[
+          {"day":"Push","exercises":[{"exercise_id":"Hammer_Curl","name":"x","sets":3,"reps":"8"}]}
+        ]},
+        {"block_number":3,"weeks":[9,10,11,12],"days":[
+          {"day":"Push","exercises":[{"exercise_id":"Squat","name":"x","sets":3,"reps":"8"}]}
+        ]}
+    ]}`
+	out, err := reg.Execute(context.Background(), "propose_programme", payload)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "ok" {
+		t.Fatalf("status: want ok, got %q (errors=%v missing=%v)", got.Status, got.Errors, got.Missing)
+	}
+	if got.Programme.Weeks[0].Days[0].Exercises[0].Name != "Barbell Curl" {
+		t.Errorf("block 1 ex: want 'Barbell Curl', got %q", got.Programme.Weeks[0].Days[0].Exercises[0].Name)
+	}
+	if got.Programme.Weeks[4].Days[0].Exercises[0].Name != "Hammer Curl" {
+		t.Errorf("block 2 ex: want 'Hammer Curl', got %q", got.Programme.Weeks[4].Days[0].Exercises[0].Name)
+	}
+	if got.Programme.Weeks[8].Days[0].Exercises[0].Name != "Squat" {
+		t.Errorf("block 3 ex: want 'Squat', got %q", got.Programme.Weeks[8].Days[0].Exercises[0].Name)
+	}
+}
+
+func TestProposeProgrammeSameDayLabelsSameExercisesAcrossBlocks(t *testing.T) {
+	reg := newCatalogRegistry(t)
+	out, err := reg.Execute(context.Background(), "propose_programme", validProgrammeJSON())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := decodeResult(t, out)
+	if got.Status != "ok" {
+		t.Fatalf("status: want ok, got %q (errors=%v)", got.Status, got.Errors)
+	}
+}
+
 func TestProposeProgrammeInvalidJSONShape(t *testing.T) {
 	reg := newStructuralRegistry()
 	out, err := reg.Execute(context.Background(), "propose_programme", `{"blocks":"not an array"}`)

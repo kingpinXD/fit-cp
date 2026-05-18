@@ -320,7 +320,9 @@ func runProposeProgramme(ctx context.Context, q *db.Queries, raw json.RawMessage
 		})
 	}
 
-	if errs := validateStructure(in); len(errs) > 0 {
+	errs := validateStructure(in)
+	errs = append(errs, validateSameDayStructure(in.Blocks)...)
+	if len(errs) > 0 {
 		return marshalResult(proposeProgrammeResult{Status: "invalid", Errors: errs})
 	}
 
@@ -431,6 +433,31 @@ var genericDayLabel = regexp.MustCompile(`(?i)^\s*(day|workout|session)\s*\d+\s*
 
 func isGenericDayLabel(s string) bool {
 	return genericDayLabel.MatchString(s)
+}
+
+// validateSameDayStructure enforces that all 3 blocks have identical day counts
+// and day labels in the same order. Allows exercise variation within a day
+// across blocks while keeping the user's split intact (block 1 Push/Pull/Legs
+// must stay Push/Pull/Legs in blocks 2 and 3).
+func validateSameDayStructure(blocks []proposeProgrammeBlock) []string {
+	var errs []string
+	if len(blocks) < 2 {
+		return errs
+	}
+	ref := blocks[0].Days
+	for i := 1; i < len(blocks); i++ {
+		cur := blocks[i].Days
+		if len(cur) != len(ref) {
+			errs = append(errs, fmt.Sprintf("block %d has %d days; block 1 has %d — day count must match across blocks", i+1, len(cur), len(ref)))
+			continue
+		}
+		for j := range ref {
+			if cur[j].Day != ref[j].Day {
+				errs = append(errs, fmt.Sprintf("block %d day %d is %q; block 1's matching day is %q — day labels must match across blocks in the same order", i+1, j+1, cur[j].Day, ref[j].Day))
+			}
+		}
+	}
+	return errs
 }
 
 // validateCatalog returns the unknown ids and a name lookup for the known
